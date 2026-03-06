@@ -637,13 +637,13 @@
       <div class="footer-links">
         <a href="#">Privacy</a>
         <a href="#">Terms</a>
-        <a href="mailto:hello@section8scout.com">Contact</a>
+        <a href="/cdn-cgi/l/email-protection#b6ded3dadad9f6c5d3d5c2dfd9d88ec5d5d9c3c298d5d9db">Contact</a>
       </div>
     </div>
   </div>
 </footer>
 
-<script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
   // Scroll reveal
   const reveals = document.querySelectorAll('.reveal');
   const observer = new IntersectionObserver((entries) => {
@@ -682,7 +682,7 @@
     btn.style.opacity = '0.7';
 
     try {
-      const res = await fetch('/.netlify/functions/subscribe', {
+      const res = await fetch('/api/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, source, tags: ['waitlist', 'section8scout'] })
@@ -734,9 +734,4 @@
 
   // Nav scroll effect
   window.addEventListener('scroll', () => {
-    document.querySelector('nav').style.background =
-      window.scrollY > 40 ? 'rgba(6,10,16,0.95)' : 'rgba(6,10,16,0.75)';
-  });
-</script>
-</body>
-</html>
+    
