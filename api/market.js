@@ -74,7 +74,22 @@ Return ONLY this JSON (no markdown, no backticks):
     const match = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
 
     if (!match) throw new Error("Could not parse market analysis");
-    return res.status(200).json(JSON.parse(match[0]));
+    const analysis = JSON.parse(match[0]);
+
+    function deepClean(obj) {
+      if (typeof obj === 'string') {
+        return obj.replace(/<cite[^>]*>([\s\S]*?)<\/cite>/g, '$1').replace(/<\/?cite[^>]*>/g, '');
+      }
+      if (Array.isArray(obj)) return obj.map(deepClean);
+      if (obj && typeof obj === 'object') {
+        const cleaned = {};
+        for (const key of Object.keys(obj)) cleaned[key] = deepClean(obj[key]);
+        return cleaned;
+      }
+      return obj;
+    }
+
+    return res.status(200).json(deepClean(analysis));
 
   } catch (err) {
     console.error("Market analysis error:", err);
