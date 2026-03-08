@@ -73,7 +73,8 @@ Then return ONLY this JSON (no markdown, no backticks, no explanation):
     });
 
     const data = await response.json();
-    const text = data.content.filter(b => b.type === "text").map(b => b.text).join("");
+   if (!data || !data.content) throw new Error("Bad API response: " + JSON.stringify(data).slice(0,150));
+   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("");
     const match = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
     
     if (!match) throw new Error("Could not parse analysis");
