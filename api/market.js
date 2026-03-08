@@ -74,7 +74,20 @@ Return ONLY this JSON (no markdown, no backticks):
     const match = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
 
     if (!match) throw new Error("Could not parse market analysis");
-    return res.status(200).json(JSON.parse(match[0]));
+    const analysis = JSON.parse(match[0]);
+
+    function cleanCites(val) {
+      if (typeof val === "string") return val.replace(/<cite[^>]*>([\s\S]*?)<\/cite>/gs, "$1");
+      if (Array.isArray(val)) return val.map(cleanCites);
+      if (val && typeof val === "object") {
+        const out = {};
+        for (const k of Object.keys(val)) out[k] = cleanCites(val[k]);
+        return out;
+      }
+      return val;
+    }
+
+    return res.status(200).json(cleanCites(analysis));
 
   } catch (err) {
     console.error("Market analysis error:", err);
