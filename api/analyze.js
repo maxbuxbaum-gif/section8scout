@@ -13,7 +13,10 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: "Missing ANTHROPIC_API_KEY" });
 
   const rtp = ((fmr / price) * 100).toFixed(2);
-  const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
+  // BASE_URL can be set explicitly (e.g. in .env.local for custom ports).
+  // On Vercel, VERCEL_URL is set automatically. Falls back to vercel dev default port 3000.
+  const baseUrl = process.env.BASE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   try {
     // Fetch crime + voucher in parallel (static, no Claude tokens)
