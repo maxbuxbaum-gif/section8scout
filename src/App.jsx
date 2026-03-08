@@ -140,11 +140,20 @@ function AnalyzerTab() {
 
     try {
       addStep("Fetching real HUD Fair Market Rent...");
+      const FMR_FALLBACKS = { 1: 950, 2: 1150, 3: 1350, 4: 1700 };
+      const bedsInt = parseInt(beds);
       let fmrData;
       try {
-        fmrData = await apiFetch("hud-fmr", { zip: zip || "44105", bedrooms: parseInt(beds) });
+        fmrData = await apiFetch("hud-fmr", { zip: zip || "44105", bedrooms: bedsInt });
       } catch {
-        fmrData = { fmr: 1200, county: "Unknown", metro: "Unknown", state, year: 2024, bedrooms: parseInt(beds), source: "Estimated" };
+        fmrData = { fmr: FMR_FALLBACKS[bedsInt] || 1150, county: "Unknown", metro: "Unknown", state, year: 2024, bedrooms: bedsInt, source: "Estimated" };
+      }
+      // Guard: if fmr is not a valid number, replace with static fallback
+      const fmrNum = typeof fmrData.fmr === "number" ? fmrData.fmr : parseFloat(fmrData.fmr);
+      if (!fmrNum || isNaN(fmrNum) || fmrNum === 0) {
+        fmrData = { ...fmrData, fmr: FMR_FALLBACKS[bedsInt] || 1150, source: "Estimated" };
+      } else {
+        fmrData = { ...fmrData, fmr: fmrNum };
       }
 
       addStep("Fetching live Zillow listing data...");
@@ -158,7 +167,7 @@ function AnalyzerTab() {
 
       let price = zillowData?.price || zillowData?.zestimate || null;
       if (!price && manualPrice) price = parseInt(manualPrice.replace(/[^0-9]/g, ""));
-      if (!price) price = 150000;
+      if (!price || isNaN(price) || price <= 0) price = 150000;
 
       addStep("Fetching real crime & voucher data...");
       addStep("Running AI analysis with live web research...");
@@ -169,8 +178,14 @@ function AnalyzerTab() {
         bedrooms: beds,
       });
 
+      // Ensure both fmr and price are valid numbers before scoring
+      const safeFmr = (typeof fmrData.fmr === "number" && !isNaN(fmrData.fmr) && fmrData.fmr > 0)
+        ? fmrData.fmr
+        : (FMR_FALLBACKS[bedsInt] || 1150);
+      const safePrice = (typeof price === "number" && !isNaN(price) && price > 0) ? price : 150000;
+
       const score = calcS8Score(
-        fmrData.fmr, price,
+        safeFmr, safePrice,
         analysis.crime_score || 55,
         analysis.voucher_demand || "MEDIUM"
       );

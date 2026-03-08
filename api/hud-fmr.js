@@ -53,16 +53,18 @@ Return ONLY this JSON object, no markdown, no explanation:
     if (!match) throw new Error("Could not parse FMR data");
     const fmrData = JSON.parse(match[0]);
     
-    // Validate fmr is a reasonable number
-    if (!fmrData.fmr || fmrData.fmr < 400 || fmrData.fmr > 5000) {
+    // Validate fmr is a valid number in a reasonable range
+    const fmrNum = typeof fmrData.fmr === "number" ? fmrData.fmr : parseFloat(fmrData.fmr);
+    if (isNaN(fmrNum) || fmrNum < 400 || fmrNum > 6000) {
       throw new Error("FMR value out of expected range");
     }
+    fmrData.fmr = fmrNum;
 
     return res.status(200).json(fmrData);
   } catch (err) {
     console.error("HUD FMR error:", err);
     // Return fallback estimate based on bedrooms
-    const fallbacks = { 1: 900, 2: 1100, 3: 1300, 4: 1600 };
+    const fallbacks = { 1: 950, 2: 1150, 3: 1350, 4: 1700 };
     return res.status(200).json({
       fmr: fallbacks[bedrooms] || 1200,
       county: "Unknown",
