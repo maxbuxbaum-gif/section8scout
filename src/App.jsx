@@ -1,579 +1,516 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
-// ═══════════════════════════════════════════════════════════════
-// SHARED UTILITIES
-// ═══════════════════════════════════════════════════════════════
-
-const GREEN = "#00E59B";
-const GOLD = "#F0C060";
-const BLUE = "#60A5FA";
-const PURPLE = "#A78BFA";
-const RED = "#E05C5C";
-const ORANGE = "#F4A636";
-
-function fmtMoney(n) { return "$" + Number(n || 0).toLocaleString(); }
-function fmtDate(str) {
-  if (!str) return "—";
-  return new Date(str).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+// ── All API calls go through Vercel serverless functions ──────────────────
+async function apiFetch(endpoint, body) {
+  const res = await fetch(`/api/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok && data.error) throw new Error(data.error);
+  return data;
 }
 
-// ── Shared input components ────────────────────────────────────
-function Input({ label, value, onChange, type = "text", placeholder, half, style }) {
+// ── Storage helpers ───────────────────────────────────────────────────────
+async function storageGet(key) {
+  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; } catch { return null; }
+}
+async function storageSet(key, val) {
+  try { await window.storage.set(key, JSON.stringify(val)); } catch {}
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────
+const TABS = ["Analyzer", "Portfolio", "Markets", "Settings"];
+const TAB_ICONS = { Analyzer: "🔍", Portfolio: "🏘", Markets: "🗺", Settings: "⚙" };
+
+// ── Shared UI ─────────────────────────────────────────────────────────────
+const S = {
+  card: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: 20 },
+  label: { fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6, display: "block" },
+};
+
+function KpiBox({ label, value, color = "#00E59B", sub }) {
   return (
-    <div style={{ flex: half ? "0 0 calc(50% - 6px)" : "1 1 100%", ...style }}>
-      {label && <label style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", letterSpacing: "0.1em", textTransform: "uppercase", display: "block", marginBottom: 5, fontFamily: "'IBM Plex Mono',monospace" }}>{label}</label>}
-      <input value={value} onChange={e => onChange(e.target.value)} type={type} placeholder={placeholder}
-        style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 9, padding: "9px 12px", color: "#fff", fontSize: 13, fontFamily: type === "number" ? "'IBM Plex Mono',monospace" : "inherit", outline: "none", transition: "border-color 0.2s" }}
+    <div style={{ ...S.card, padding: "14px 16px" }}>
+      <span style={S.label}>{label}</span>
+      <div style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1.15 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Badge({ label, color }) {
+  return <span style={{ fontSize: 10, color, background: color + "18", border: `1px solid ${color}28`, padding: "3px 9px", borderRadius: 20, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{label}</span>;
+}
+
+function Btn({ children, onClick, variant = "primary", disabled, style }) {
+  const variants = {
+    primary: { background: "linear-gradient(135deg,#00E59B,#0AB87A)", color: "#060A10" },
+    ghost: { background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.1)" },
+    danger: { background: "rgba(224,92,92,0.1)", color: "#E05C5C", border: "1px solid rgba(224,92,92,0.2)" },
+  };
+  return (
+    <button onClick={onClick} disabled={disabled} style={{ border: "none", borderRadius: 10, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: 13, padding: "11px 20px", transition: "all 0.15s", opacity: disabled ? 0.5 : 1, ...variants[variant], ...style }}>
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, value, onChange, placeholder, type = "text", mono }) {
+  return (
+    <div>
+      {label && <label style={S.label}>{label}</label>}
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
+        style={{ width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 9, padding: "10px 13px", color: "#E8EDF5", fontSize: 13, fontFamily: mono ? "'IBM Plex Mono',monospace" : "'Syne',sans-serif", outline: "none", transition: "border-color 0.2s" }}
         onFocus={e => e.target.style.borderColor = "rgba(0,229,155,0.4)"}
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.1)"} />
     </div>
   );
 }
 
-function Select({ label, value, onChange, options, half }) {
+function Spinner() {
+  return <div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.1)", borderTopColor: "#00E59B", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />;
+}
+
+function SourcePill({ label }) {
+  return <span style={{ fontSize: 9, background: "rgba(0,229,155,0.08)", border: "1px solid rgba(0,229,155,0.15)", color: "rgba(0,229,155,0.7)", padding: "2px 7px", borderRadius: 4, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.06em" }}>{label}</span>;
+}
+
+function ScoreRing({ score }) {
+  const color = score >= 80 ? "#00E59B" : score >= 65 ? "#4CAF7D" : score >= 50 ? "#F4A636" : "#E05C5C";
+  const r = 44, circ = 2 * Math.PI * r;
   return (
-    <div style={{ flex: half ? "0 0 calc(50% - 6px)" : "1 1 100%" }}>
-      {label && <label style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", letterSpacing: "0.1em", textTransform: "uppercase", display: "block", marginBottom: 5, fontFamily: "'IBM Plex Mono',monospace" }}>{label}</label>}
-      <select value={value} onChange={e => onChange(e.target.value)}
-        style={{ width: "100%", background: "#101828", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 9, padding: "9px 12px", color: "#fff", fontSize: 13, outline: "none", cursor: "pointer" }}>
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+    <div style={{ position: "relative", width: 110, height: 110, flexShrink: 0 }}>
+      <svg width="110" height="110" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="55" cy="55" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="8" />
+        <circle cx="55" cy="55" r={r} fill="none" stroke={color} strokeWidth="8"
+          strokeDasharray={`${(score / 100) * circ} ${circ}`} strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 1s ease" }} />
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ fontSize: 30, fontWeight: 800, color, fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1 }}>{score}</div>
+        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em" }}>S8 SCORE</div>
+      </div>
     </div>
   );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// PROPERTY ANALYZER
-// ═══════════════════════════════════════════════════════════════
-
-function extractZip(address) {
-  const m = address.match(/\b(\d{5})\b/);
-  return m ? m[1] : null;
-}
-
-function calcS8Score({ rentToPriceRatio, crimeScore, demand, schoolRating }) {
-  const rtpScore = Math.min(40, (rentToPriceRatio / 0.02) * 40);
-  const crimeComponent = (crimeScore / 100) * 25;
-  const demandComponent = demand === "HIGH" ? 20 : demand === "MEDIUM" ? 12 : 5;
-  const schoolComponent = (schoolRating / 10) * 15;
-  return Math.round(rtpScore + crimeComponent + demandComponent + schoolComponent);
 }
 
 function getVerdict(score) {
-  if (score >= 80) return { label: "STRONG BUY", color: GREEN, bg: "rgba(0,229,155,0.12)" };
-  if (score >= 65) return { label: "GOOD DEAL", color: "#4CAF7D", bg: "rgba(76,175,125,0.12)" };
-  if (score >= 50) return { label: "PROCEED WITH CAUTION", color: ORANGE, bg: "rgba(244,166,54,0.12)" };
-  return { label: "NOT RECOMMENDED", color: RED, bg: "rgba(224,92,92,0.12)" };
+  if (score >= 80) return { label: "STRONG BUY", color: "#00E59B" };
+  if (score >= 65) return { label: "GOOD DEAL", color: "#4CAF7D" };
+  if (score >= 50) return { label: "PROCEED WITH CAUTION", color: "#F4A636" };
+  return { label: "NOT RECOMMENDED", color: "#E05C5C" };
 }
 
-async function fetchHUDFMR(zip, address, apiKey) {
-  const prompt = `Search for the current HUD Fair Market Rents for ZIP code ${zip || address}.
-Return ONLY this JSON (no markdown, no backticks, no explanation):
-{"zip":"${zip}","county":"County Name, ST","metro":"Metro Area Name","fmr":{"1":950,"2":1200,"3":1500,"4":1800},"year":"2025","source":"HUD FMR"}
-Use real current HUD Fair Market Rent values.`;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514", max_tokens: 600,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: prompt }]
-    })
-  });
-  const data = await res.json();
-  const text = data.content.filter(b => b.type === "text").map(b => b.text).join("");
-  const m = text.replace(/```json|```/g, "").match(/\{[\s\S]*?\}/);
-  if (m) return JSON.parse(m[0]);
-  throw new Error("HUD parse failed");
+function calcS8Score(fmr, price, crimeScore, voucherDemand) {
+  if (!fmr || !price) return 0;
+  const rtp = (fmr / price) * 100;
+  const rtpPts = Math.min(40, (rtp / 2) * 40);
+  const crimePts = ((crimeScore || 55) / 100) * 25;
+  const demandPts = voucherDemand === "HIGH" ? 20 : voucherDemand === "MEDIUM" ? 13 : 7;
+  const affordPts = Math.min(15, (300000 / price) * 10);
+  return Math.round(rtpPts + crimePts + demandPts + affordPts);
 }
 
-async function fetchZillow(address, rapidApiKey) {
-  const url = `https://zillow56.p.rapidapi.com/search?location=${encodeURIComponent(address)}&output=json&status=forSale`;
-  const res = await fetch(url, { headers: { "X-RapidAPI-Key": rapidApiKey, "X-RapidAPI-Host": "zillow56.p.rapidapi.com" } });
-  if (!res.ok) throw new Error(`Zillow ${res.status}`);
-  const data = await res.json();
-  if (!data.results?.length) throw new Error("No Zillow results");
-  const p = data.results[0];
-  return { address: p.address, price: p.price, zestimate: p.zestimate, rentZestimate: p.rentZestimate, bedrooms: p.bedrooms, bathrooms: p.bathrooms, livingArea: p.livingArea, daysOnZillow: p.daysOnZillow, url: `https://www.zillow.com/homes/${p.zpid}_zpid/` };
-}
-
-async function analyzeWithClaude({ address, bedrooms, price, fmrData, crimeScore, schoolRating, s8Score, rentToPriceRatio, zillowData }) {
-  const fmr = fmrData.fmr[String(bedrooms)] || fmrData.fmr["3"] || 1400;
-  const verdict = getVerdict(s8Score);
-  const zCtx = zillowData ? `Zillow Zestimate: $${zillowData.zestimate?.toLocaleString()}, Rent Zestimate: $${zillowData.rentZestimate?.toLocaleString()}/mo, ${zillowData.daysOnZillow ?? "N/A"} days on market` : "";
-  const prompt = `Section 8 real estate expert. Analyze this property. Return ONLY JSON (no markdown):
-${address} | ${bedrooms}BR | $${price.toLocaleString()} | HUD FMR: $${fmr}/mo | Rent-to-Price: ${(rentToPriceRatio * 100).toFixed(2)}% | Crime: ${crimeScore}/100 | Schools: ${schoolRating}/10 | S8 Score: ${s8Score}/100 — ${verdict.label}
-${zCtx}
-{"headline":"max 12 words","cashflow_low":number,"cashflow_high":number,"pros":["a","b","c"],"risks":["a","b"],"tip":"1-2 sentences","price_vs_zestimate":"brief or null"}`;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 800, messages: [{ role: "user", content: prompt }] })
-  });
-  const data = await res.json();
-  const text = data.content.map(b => b.text || "").join("");
-  const m = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
-  return JSON.parse(m[0]);
-}
-
-function PropertyAnalyzer({ apiKeys }) {
+// ══════════════════════════════════════════════════════════════════════════
+// ANALYZER TAB
+// ══════════════════════════════════════════════════════════════════════════
+function AnalyzerTab() {
   const [address, setAddress] = useState("");
-  const [bedrooms, setBedrooms] = useState("3");
+  const [beds, setBeds] = useState("3");
   const [manualPrice, setManualPrice] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [loadingStep, setLoadingStep] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [steps, setSteps] = useState([]);
   const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [zillowKey, setZillowKey] = useState("");
 
-  const demos = ["123 Maple St, Cleveland OH 44105", "456 Oak Ave, Detroit MI 48205", "789 Pine Rd, Philadelphia PA 19132"];
+  useEffect(() => {
+    storageGet("s8scout-zillow-key").then(k => { if (k) setZillowKey(k); });
+  }, []);
+
+  function addStep(msg) {
+    setSteps(s => {
+      const updated = s.map((x, i) => i === s.length - 1 ? { ...x, done: true } : x);
+      return [...updated, { msg, done: false }];
+    });
+  }
 
   async function analyze() {
     if (!address.trim()) return;
-    setLoading(true); setError(""); setResult(null); setChatMessages([]);
-    const zip = extractZip(address);
-    let price = parseFloat(manualPrice) || 0;
-    let zillowData = null;
-    let fmrData = null;
+    const zipMatch = address.match(/\b\d{5}\b/);
+    const zip = zipMatch ? zipMatch[0] : "";
+    const cityStateMatch = address.match(/,\s*([^,]+?)\s+([A-Z]{2})\s*\d{5}/);
+    const city = cityStateMatch ? cityStateMatch[1].trim() : "";
+    const state = cityStateMatch ? cityStateMatch[2] : "";
+
+    setStatus("loading");
+    setResult(null);
+    setErrorMsg("");
+    setSteps([{ msg: "Starting analysis...", done: false }]);
 
     try {
-      // Zillow
-      if (apiKeys.rapidApi) {
-        setLoadingStep("Fetching Zillow data...");
-        try {
-          zillowData = await fetchZillow(address, apiKeys.rapidApi);
-          if (!price && zillowData.price) price = zillowData.price;
-        } catch (e) { console.warn("Zillow:", e.message); }
-      }
-
-      // HUD FMR
-      setLoadingStep("Looking up HUD Fair Market Rents...");
+      addStep("Fetching real HUD Fair Market Rent...");
+      let fmrData;
       try {
-        fmrData = await fetchHUDFMR(zip, address);
+        fmrData = await apiFetch("hud-fmr", { zip: zip || "44105", bedrooms: parseInt(beds) });
       } catch {
-        const est = { "1": 900, "2": 1100, "3": 1350, "4": 1600 };
-        fmrData = { zip, county: "Unknown County", metro: "Unknown Metro", fmr: est, year: "2025", source: "Estimated" };
+        fmrData = { fmr: 1200, county: "Unknown", metro: "Unknown", state, year: 2024, bedrooms: parseInt(beds), source: "Estimated" };
       }
 
+      addStep("Fetching live Zillow listing data...");
+      let zillowData = null;
+      if (zillowKey) {
+        try {
+          zillowData = await apiFetch("zillow", { address, rapidApiKey: zillowKey });
+          if (zillowData.error) zillowData = null;
+        } catch { zillowData = null; }
+      }
+
+      let price = zillowData?.price || zillowData?.zestimate || null;
+      if (!price && manualPrice) price = parseInt(manualPrice.replace(/[^0-9]/g, ""));
       if (!price) price = 150000;
-      const fmr = fmrData.fmr[bedrooms] || fmrData.fmr["3"];
-      const rentToPriceRatio = fmr / price;
-      const crimeScore = Math.floor(Math.random() * 22) + 52;
-      const schoolRating = Math.floor(Math.random() * 4) + 5;
-      const demand = fmr > 1400 ? "HIGH" : fmr > 1000 ? "MEDIUM" : "LOW";
-      const s8Score = calcS8Score({ rentToPriceRatio, crimeScore, demand, schoolRating });
 
-      // AI Analysis
-      setLoadingStep("Running AI analysis...");
-      const analysis = await analyzeWithClaude({ address, bedrooms: parseInt(bedrooms), price, fmrData, crimeScore, schoolRating, s8Score, rentToPriceRatio, zillowData });
+      addStep("Fetching real crime & voucher data...");
+      addStep("Running AI analysis with live web research...");
 
-      setResult({ address, bedrooms: parseInt(bedrooms), price, zip, fmrData, fmr, zillowData, crimeScore, schoolRating, demand, s8Score, rentToPriceRatio, analysis });
-    } catch (e) {
-      setError("Analysis failed: " + e.message);
-    } finally {
-      setLoading(false); setLoadingStep("");
+      const analysis = await apiFetch("analyze", {
+        address, zip, city, state,
+        fmr: fmrData.fmr, price,
+        bedrooms: beds,
+        s8Score: calcS8Score(fmrData.fmr, price, 55, "MEDIUM")
+      });
+
+      const score = calcS8Score(
+        fmrData.fmr, price,
+        analysis.crime_score || 55,
+        analysis.voucher_demand || "MEDIUM"
+      );
+
+      setSteps(s => s.map(x => ({ ...x, done: true })));
+      setResult({ fmr: fmrData, zillow: zillowData, price, score, analysis, address, zip, city, state, beds });
+      setStatus("done");
+      setChatMessages([]);
+    } catch (err) {
+      setErrorMsg(err.message || "Analysis failed. Check that ANTHROPIC_API_KEY is set in Vercel.");
+      setStatus("error");
     }
   }
 
-  async function sendChat(msg) {
-    if (!msg.trim() || !result) return;
-    const userMsg = { role: "user", content: msg };
-    const newMsgs = [...chatMessages, userMsg];
-    setChatMessages(newMsgs); setChatInput(""); setChatLoading(true);
-    const system = `You are a Section 8 real estate advisor. Property: ${result.address}, ${result.bedrooms}BR, $${result.price.toLocaleString()}, S8 Score: ${result.s8Score}/100, HUD FMR: $${result.fmr}/mo. Be concise and specific.`;
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 500, system, messages: newMsgs })
-    });
-    const data = await res.json();
-    const reply = data.content.map(b => b.text || "").join("");
-    setChatMessages([...newMsgs, { role: "assistant", content: reply }]);
+  async function sendChat() {
+    if (!chatInput.trim() || chatLoading || !result) return;
+    const userMsg = chatInput.trim();
+    setChatInput("");
+    setChatLoading(true);
+    const newMessages = [...chatMessages, { role: "user", content: userMsg }];
+    setChatMessages(newMessages);
+    try {
+      const rtp = ((result.fmr.fmr / result.price) * 100).toFixed(2);
+      const data = await apiFetch("chat", {
+        messages: newMessages,
+        propertyContext: `Address: ${result.address} | ZIP: ${result.zip} | Bedrooms: ${result.beds}BR
+HUD FMR: $${result.fmr.fmr}/mo (${result.fmr.county}) | Purchase Price: $${result.price.toLocaleString()}
+S8 Score: ${result.score}/100 | Verdict: ${getVerdict(result.score).label}
+Rent-to-Price: ${rtp}% | Voucher Demand: ${result.analysis.voucher_demand}
+Crime Rating: ${result.analysis.crime_rating} (${result.analysis.crime_score}/100)
+Est. Cash Flow: $${result.analysis.cashflow_low}–$${result.analysis.cashflow_high}/mo
+Inspection Likelihood: ${result.analysis.inspection_likelihood} | Market Trend: ${result.analysis.market_trend}`
+      });
+      setChatMessages([...newMessages, { role: "assistant", content: data.reply }]);
+    } catch {
+      setChatMessages([...newMessages, { role: "assistant", content: "Sorry, couldn't reach the advisor. Try again." }]);
+    }
     setChatLoading(false);
   }
 
-  const v = result ? getVerdict(result.s8Score) : null;
+  const verdict = result ? getVerdict(result.score) : null;
+  const rtp = result ? ((result.fmr.fmr / result.price) * 100).toFixed(2) : null;
 
   return (
-    <div style={{ padding: "24px 28px", maxWidth: 900 }}>
-      <style>{`@keyframes spin { to{transform:rotate(360deg)} } @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }`}</style>
-
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
-        <div>
-          <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>Property Analyzer</h2>
-          <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>Get your S8 Score with live HUD FMR + Zillow data in seconds</p>
+    <div style={{ maxWidth: 880, margin: "0 auto" }}>
+      {/* Search */}
+      <div style={{ ...S.card, marginBottom: 16, padding: "22px 24px" }}>
+        <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>Property Analyzer</div>
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 18 }}>Real HUD FMR · Live Zillow · FBI crime data · HUD voucher data · AI analysis</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ flex: "1 1 300px" }}>
+            <Field label="Property Address (include ZIP code)" value={address} onChange={setAddress} placeholder="123 Maple St, Cleveland OH 44105" />
+          </div>
+          <div style={{ flex: "0 0 90px" }}>
+            <label style={S.label}>Bedrooms</label>
+            <select value={beds} onChange={e => setBeds(e.target.value)} style={{ width: "100%", background: "#101828", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 9, padding: "10px 12px", color: "#E8EDF5", fontSize: 13, outline: "none", fontFamily: "'Syne',sans-serif" }}>
+              {["1","2","3","4"].map(n => <option key={n} value={n}>{n} BR</option>)}
+            </select>
+          </div>
+          <div style={{ flex: "0 0 160px" }}>
+            <Field label="Price Override (optional)" value={manualPrice} onChange={setManualPrice} placeholder="Leave blank for Zillow" mono />
+          </div>
+          <Btn onClick={analyze} disabled={status === "loading" || !address.trim()} style={{ flexShrink: 0 }}>
+            {status === "loading" ? "Analyzing..." : "Analyze →"}
+          </Btn>
         </div>
-        <button onClick={() => setShowSettings(s => !s)} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "7px 14px", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>⚙ API Keys</button>
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)", fontFamily: "'IBM Plex Mono',monospace" }}>Try:</span>
+          {["123 Maple St, Cleveland OH 44105", "456 Oak Ave, Detroit MI 48205", "789 Pine Rd, Philadelphia PA 19132"].map(a => (
+            <button key={a} onClick={() => setAddress(a)} style={{ fontSize: 11, color: "rgba(0,229,155,0.7)", background: "rgba(0,229,155,0.07)", border: "1px solid rgba(0,229,155,0.15)", borderRadius: 6, padding: "3px 9px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>{a}</button>
+          ))}
+        </div>
       </div>
 
-      {/* Settings panel */}
-      {showSettings && (
-        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 18, marginBottom: 20, animation: "fadeUp 0.2s ease" }}>
-          <div style={{ fontSize: 11, color: GREEN, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 12 }}>API CONFIGURATION</div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <Input label="RapidAPI Key (Zillow)" value={apiKeys.rapidApi} onChange={v => apiKeys.setRapidApi(v)} placeholder="Optional — enables live Zillow data" />
-          </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 10, fontFamily: "'IBM Plex Mono',monospace" }}>Without RapidAPI key: enter price manually. HUD FMR always fetched via AI.</div>
+      {/* Loading steps */}
+      {status === "loading" && (
+        <div style={{ ...S.card, marginBottom: 16 }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: i < steps.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+              {s.done ? <span style={{ color: "#00E59B", fontSize: 14, width: 16, textAlign: "center" }}>✓</span> : <Spinner />}
+              <span style={{ fontSize: 13, color: s.done ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.7)", fontFamily: "'IBM Plex Mono',monospace" }}>{s.msg}</span>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Search */}
-      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: 20, marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-          <Input label="Property Address" value={address} onChange={setAddress} placeholder="123 Maple St, Cleveland OH 44105" />
-          <Select label="Bedrooms" value={bedrooms} onChange={setBedrooms} options={[{value:"1",label:"1 BR"},{value:"2",label:"2 BR"},{value:"3",label:"3 BR"},{value:"4",label:"4 BR"}]} half />
+      {/* Error */}
+      {status === "error" && (
+        <div style={{ ...S.card, borderColor: "rgba(224,92,92,0.3)", background: "rgba(224,92,92,0.05)", marginBottom: 16, color: "#E05C5C", fontSize: 13, lineHeight: 1.6 }}>
+          ✕ {errorMsg}
+          <div style={{ marginTop: 8, fontSize: 11, color: "rgba(224,92,92,0.6)", fontFamily: "'IBM Plex Mono',monospace" }}>Check Vercel → Settings → Environment Variables → ANTHROPIC_API_KEY is set</div>
         </div>
-        {!apiKeys.rapidApi && (
-          <Input label="Purchase Price (if no Zillow key)" value={manualPrice} onChange={setManualPrice} type="number" placeholder="150000" />
-        )}
-        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <button onClick={analyze} disabled={loading || !address.trim()}
-            style={{ background: `linear-gradient(135deg,${GREEN},#0AB87A)`, border: "none", borderRadius: 10, padding: "11px 24px", color: "#060A10", fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "'Syne',sans-serif", opacity: loading ? 0.7 : 1 }}>
-            {loading ? `${loadingStep}` : "Analyze Property →"}
-          </button>
-          {loading && <div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.15)", borderTopColor: GREEN, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {demos.map(d => (
-              <button key={d} onClick={() => setAddress(d)} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7, padding: "5px 10px", color: "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>
-                {d.split(",")[1]?.trim().split(" ")[0] || "Demo"}
-              </button>
-            ))}
-          </div>
-        </div>
-        {error && <div style={{ marginTop: 12, fontSize: 12, color: RED, fontFamily: "'IBM Plex Mono',monospace" }}>{error}</div>}
-      </div>
+      )}
 
       {/* Results */}
-      {result && (
-        <div style={{ animation: "fadeUp 0.4s ease" }}>
-          {/* S8 Score hero */}
-          <div style={{ background: v.bg, border: `1px solid ${v.color}25`, borderRadius: 14, padding: "20px 24px", marginBottom: 16, display: "flex", alignItems: "center", gap: 24 }}>
-            <div style={{ textAlign: "center", flexShrink: 0 }}>
-              <div style={{ fontSize: 64, fontWeight: 800, color: v.color, fontFamily: "'IBM Plex Mono',monospace", lineHeight: 1 }}>{result.s8Score}</div>
-              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace" }}>S8 SCORE</div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: v.color, fontFamily: "'Syne',sans-serif", marginBottom: 4 }}>{v.label}</div>
-              <div style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", fontStyle: "italic" }}>{result.analysis.headline}</div>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginTop: 6, fontFamily: "'IBM Plex Mono',monospace" }}>{result.address} · {result.bedrooms}BR · {fmtMoney(result.price)}</div>
-            </div>
-          </div>
-
-          {/* Metrics grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
-            {[
-              ["HUD FMR", `${fmtMoney(result.fmr)}/mo`, GREEN, result.fmrData.source === "Estimated" ? "Estimated" : `${result.fmrData.county} · ${result.fmrData.year}`],
-              ["Rent/Price", `${(result.rentToPriceRatio * 100).toFixed(2)}%`, result.rentToPriceRatio >= 0.01 ? GREEN : ORANGE, result.rentToPriceRatio >= 0.01 ? "✓ Meets 1% rule" : "Below 1% rule"],
-              ["Est. Cash Flow", `${fmtMoney(result.analysis.cashflow_low)}–${fmtMoney(result.analysis.cashflow_high)}`, GOLD, "per month"],
-              ["Voucher Demand", result.demand, result.demand === "HIGH" ? GREEN : ORANGE, `${result.bedrooms}BR in zip ${result.zip}`],
-            ].map(([label, val, color, sub]) => (
-              <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "12px 14px" }}>
-                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6 }}>{label}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color, fontFamily: "'IBM Plex Mono',monospace" }}>{val}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 3 }}>{sub}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Score breakdown */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 16 }}>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 12 }}>Score Breakdown</div>
-              {[
-                ["Rent-to-Price", Math.min(40, (result.rentToPriceRatio / 0.02) * 40), 40, GREEN],
-                ["Crime Safety", Math.round((result.crimeScore / 100) * 25), 25, BLUE],
-                ["Voucher Demand", result.demand === "HIGH" ? 20 : 12, 20, PURPLE],
-                ["Neighborhood", Math.round((result.schoolRating / 10) * 15), 15, GOLD],
-              ].map(([label, val, max, color]) => (
-                <div key={label} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontFamily: "'IBM Plex Mono',monospace" }}>{label}</span>
-                    <span style={{ fontSize: 11, color, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{Math.round(val)}/{max}</span>
-                  </div>
-                  <div style={{ height: 5, background: "rgba(255,255,255,0.07)", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${(val / max) * 100}%`, background: color, borderRadius: 3 }} />
-                  </div>
+      {status === "done" && result && (() => {
+        const a = result.analysis;
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {/* Score card */}
+            <div style={{ ...S.card, background: `linear-gradient(135deg,rgba(12,18,32,0.98) 50%,${verdict.color}10)`, padding: "22px 24px" }}>
+              <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
+                <ScoreRing score={result.score} />
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontSize: 23, fontWeight: 800, color: verdict.color, letterSpacing: "-0.02em", marginBottom: 4 }}>{verdict.label}</div>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 10, fontFamily: "'IBM Plex Mono',monospace" }}>{result.address}</div>
+                  {a.headline && <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.65, fontStyle: "italic" }}>"{a.headline}"</div>}
                 </div>
-              ))}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Badge label={`${a.voucher_demand || "?"} DEMAND`} color={a.voucher_demand === "HIGH" ? "#00E59B" : "#F4A636"} />
+                  <Badge label={`CRIME: ${(a.crime_rating || "?").toUpperCase()}`} color={a.crime_rating === "low" ? "#00E59B" : a.crime_rating === "moderate" ? "#F4A636" : "#E05C5C"} />
+                  <Badge label={`${(a.market_trend || "stable").toUpperCase()}`} color="#60A5FA" />
+                </div>
+              </div>
+              {a.data_sources && (
+                <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", fontFamily: "'IBM Plex Mono',monospace" }}>DATA SOURCES:</span>
+                  {a.data_sources.map((s, i) => <SourcePill key={i} label={s} />)}
+                </div>
+              )}
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 16 }}>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 12 }}>AI Analysis</div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 10, color: GREEN, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6 }}>✓ PROS</div>
-                {result.analysis.pros.map((p, i) => <div key={i} style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 4, display: "flex", gap: 6 }}><span style={{ color: GREEN, flexShrink: 0 }}>→</span>{p}</div>)}
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 10, color: ORANGE, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6 }}>⚠ RISKS</div>
-                {result.analysis.risks.map((r, i) => <div key={i} style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 4, display: "flex", gap: 6 }}><span style={{ color: ORANGE, flexShrink: 0 }}>→</span>{r}</div>)}
-              </div>
-              <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: 10 }}>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 4 }}>💡 TIP</div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", lineHeight: 1.6 }}>{result.analysis.tip}</div>
-              </div>
+            {/* Key metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10 }}>
+              <KpiBox label="HUD FMR" value={`$${result.fmr.fmr.toLocaleString()}/mo`} color="#00E59B" sub={`${result.beds}BR · ${result.fmr.county || result.zip}`} />
+              <KpiBox label="Purchase Price" value={`$${result.price.toLocaleString()}`} color="rgba(255,255,255,0.8)" sub={result.zillow?.source === "zillow_live" ? "Live Zillow" : "Manual / Estimated"} />
+              <KpiBox label="Rent/Price Ratio" value={`${rtp}%`} color={parseFloat(rtp) >= 1.0 ? "#00E59B" : "#F4A636"} sub="Target ≥ 1.0%" />
+              {a.cashflow_low && <KpiBox label="Est. Cash Flow" value={`$${a.cashflow_low}–${a.cashflow_high}/mo`} color="#F0C060" sub="After all expenses" />}
+              {result.zillow?.zestimate && <KpiBox label="Zestimate" value={`$${result.zillow.zestimate.toLocaleString()}`} color="#A78BFA" sub="Zillow estimate" />}
+              {a.recommended_offer && <KpiBox label="Recommended Offer" value={`$${a.recommended_offer.toLocaleString()}`} color="#60A5FA" sub="AI suggestion" />}
             </div>
-          </div>
 
-          {/* Zillow data */}
-          {result.zillowData && (
-            <div style={{ background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.15)", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-              <div style={{ fontSize: 10, color: BLUE, letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 12 }}>🏠 Live Zillow Data</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {/* Score breakdown */}
+            <div style={{ ...S.card }}>
+              <span style={S.label}>Score Breakdown</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px" }}>
                 {[
-                  ["List Price", fmtMoney(result.zillowData.price)],
-                  ["Zestimate", fmtMoney(result.zillowData.zestimate)],
-                  ["Rent Zestimate", `${fmtMoney(result.zillowData.rentZestimate)}/mo`],
-                  ["Days on Market", result.zillowData.daysOnZillow ?? "N/A"],
-                ].map(([k, v]) => (
-                  <div key={k}>
-                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 3 }}>{k}</div>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: BLUE, fontFamily: "'IBM Plex Mono',monospace" }}>{v}</div>
+                  ["Rent-to-Price (40pts)", Math.min(40, (parseFloat(rtp) / 2) * 40), 40, "#00E59B", a.crime_source ? null : null],
+                  ["Crime Safety (25pts)", Math.round(((a.crime_score || 55) / 100) * 25), 25, "#60A5FA"],
+                  ["Voucher Demand (20pts)", a.voucher_demand === "HIGH" ? 20 : a.voucher_demand === "MEDIUM" ? 13 : 7, 20, "#A78BFA"],
+                  ["Affordability (15pts)", Math.min(15, (300000 / result.price) * 10), 15, "#F0C060"],
+                ].map(([label, val, max, color]) => (
+                  <div key={label}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontFamily: "'IBM Plex Mono',monospace" }}>{label}</span>
+                      <span style={{ fontSize: 11, color, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{Math.round(val)}/{max}</span>
+                    </div>
+                    <div style={{ height: 5, background: "rgba(255,255,255,0.07)", borderRadius: 3 }}>
+                      <div style={{ height: "100%", width: `${Math.max(0, Math.min(100, (val / max) * 100))}%`, background: color, borderRadius: 3, transition: "width 1s ease" }} />
+                    </div>
                   </div>
                 ))}
               </div>
-              <a href={result.zillowData.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: BLUE, fontFamily: "'IBM Plex Mono',monospace", marginTop: 10, display: "inline-block" }}>View on Zillow →</a>
+              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {a.crime_source && <SourcePill label={`Crime: ${a.crime_source}`} />}
+                {a.voucher_source && <SourcePill label={`Vouchers: ${a.voucher_source}`} />}
+              </div>
             </div>
-          )}
 
-          {/* AI Chat */}
-          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: 16 }}>
-            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 12 }}>🤖 AI Advisor — Ask anything about this property</div>
-            <div style={{ maxHeight: 200, overflowY: "auto", marginBottom: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-              {chatMessages.length === 0 && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.25)", fontStyle: "italic" }}>Ask about inspection requirements, tenant placement, cash flow projections...</div>}
-              {chatMessages.map((m, i) => (
-                <div key={i} style={{ background: m.role === "user" ? "rgba(0,229,155,0.08)" : "rgba(255,255,255,0.04)", border: `1px solid ${m.role === "user" ? "rgba(0,229,155,0.15)" : "rgba(255,255,255,0.07)"}`, borderRadius: 8, padding: "8px 12px" }}>
-                  <div style={{ fontSize: 9, color: m.role === "user" ? GREEN : "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 4 }}>{m.role === "user" ? "YOU" : "ADVISOR"}</div>
-                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)", lineHeight: 1.55 }}>{m.content}</div>
-                </div>
-              ))}
-              {chatLoading && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", fontStyle: "italic", fontFamily: "'IBM Plex Mono',monospace" }}>Thinking...</div>}
+            {/* Neighborhood + voucher intel */}
+            {(a.neighborhood_notes || a.housing_authority) && (
+              <div style={{ ...S.card, background: "rgba(96,165,250,0.04)", borderColor: "rgba(96,165,250,0.14)" }}>
+                <span style={{ ...S.label, color: "#60A5FA" }}>📍 Neighborhood & Voucher Intelligence</span>
+                {a.neighborhood_notes && <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", lineHeight: 1.65, marginBottom: 8 }}>{a.neighborhood_notes}</div>}
+                {a.housing_authority && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)" }}>🏛 {a.housing_authority}{a.voucher_waitlist && a.voucher_waitlist !== "unknown" ? ` — Waitlist: ${a.voucher_waitlist}` : ""}{a.total_hcv_units ? ` · ~${a.total_hcv_units.toLocaleString()} active vouchers` : ""}</div>}
+              </div>
+            )}
+
+            {/* Pros / Risks */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ ...S.card, borderColor: "rgba(0,229,155,0.15)" }}>
+                <span style={{ ...S.label, color: "#00E59B" }}>✓ Why This Works</span>
+                {a.pros?.map((p, i) => <div key={i} style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 7, display: "flex", gap: 8 }}><span style={{ color: "#00E59B", flexShrink: 0 }}>→</span>{p}</div>)}
+              </div>
+              <div style={{ ...S.card, borderColor: "rgba(244,166,54,0.15)" }}>
+                <span style={{ ...S.label, color: "#F4A636" }}>⚠ Watch Out For</span>
+                {a.risks?.map((r, i) => <div key={i} style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 7, display: "flex", gap: 8 }}><span style={{ color: "#F4A636", flexShrink: 0 }}>→</span>{r}</div>)}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat(chatInput)} placeholder="Will this pass HUD inspection?" style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "8px 12px", color: "#fff", fontSize: 13, outline: "none" }} onFocus={e => e.target.style.borderColor = "rgba(0,229,155,0.35)"} onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.1)"} />
-              <button onClick={() => sendChat(chatInput)} style={{ background: GREEN, border: "none", borderRadius: 8, padding: "8px 16px", color: "#060A10", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Send</button>
+
+            {/* Tip */}
+            {a.tip && (
+              <div style={{ ...S.card, display: "flex", gap: 12 }}>
+                <div style={{ fontSize: 20 }}>💡</div>
+                <div>
+                  <span style={S.label}>Investor Tip</span>
+                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", lineHeight: 1.65 }}>{a.tip}</div>
+                  <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <div><span style={S.label}>HUD Inspection</span><Badge label={(a.inspection_likelihood || "?").toUpperCase()} color={a.inspection_likelihood === "high" ? "#00E59B" : a.inspection_likelihood === "medium" ? "#F4A636" : "#E05C5C"} /></div>
+                    <div><span style={S.label}>Landlord-Friendly</span><Badge label={a.landlord_friendly ? "YES" : "NO"} color={a.landlord_friendly ? "#00E59B" : "#E05C5C"} /></div>
+                    {a.voucher_waitlist && a.voucher_waitlist !== "unknown" && <div><span style={S.label}>Voucher Waitlist</span><Badge label={a.voucher_waitlist.toUpperCase()} color={a.voucher_waitlist === "open" ? "#00E59B" : "#F4A636"} /></div>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* AI Chat */}
+            <div style={{ ...S.card }}>
+              <span style={{ ...S.label, color: "rgba(255,255,255,0.4)" }}>💬 AI Advisor — Ask Anything About This Property</span>
+              <div style={{ maxHeight: 240, overflowY: "auto", marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                {chatMessages.length === 0 && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.2)", fontStyle: "italic" }}>Ask about inspection requirements, financing, tenant screening, cash flow, negotiation strategy...</div>}
+                {chatMessages.map((m, i) => (
+                  <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "82%", background: m.role === "user" ? "rgba(0,229,155,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${m.role === "user" ? "rgba(0,229,155,0.2)" : "rgba(255,255,255,0.08)"}`, borderRadius: 10, padding: "9px 13px", fontSize: 13, color: "rgba(255,255,255,0.8)", lineHeight: 1.6 }}>{m.content}</div>
+                ))}
+                {chatLoading && <div style={{ alignSelf: "flex-start", fontSize: 12, color: "rgba(255,255,255,0.3)", fontStyle: "italic" }}>Thinking...</div>}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat()} placeholder="Will this pass HUD inspection? What should I offer?" style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 9, padding: "9px 13px", color: "#E8EDF5", fontSize: 13, outline: "none", fontFamily: "'Syne',sans-serif" }} />
+                <Btn onClick={sendChat} disabled={chatLoading || !chatInput.trim()} style={{ padding: "9px 16px" }}>Send</Btn>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// PORTFOLIO TRACKER (inline — full version)
-// ═══════════════════════════════════════════════════════════════
-
-async function loadPortfolio() {
-  try { const r = await window.storage.get("s8scout-portfolio"); return r ? JSON.parse(r.value) : null; } catch { return null; }
-}
-async function savePortfolio(data) {
-  try { await window.storage.set("s8scout-portfolio", JSON.stringify(data)); } catch {}
-}
-
+// ══════════════════════════════════════════════════════════════════════════
+// PORTFOLIO TAB
+// ══════════════════════════════════════════════════════════════════════════
 const SAMPLE_PROPS = [
-  { id: "1", address: "123 Maple St", city: "Cleveland", state: "OH", zip: "44105", bedrooms: 3, bathrooms: 1, purchasePrice: 89000, purchaseDate: "2023-06-15", fmr: 1340, monthlyRent: 1340, status: "occupied", tenant: "Johnson Family", leaseStart: "2023-08-01", leaseEnd: "2024-07-31", s8Score: 82, mortgagePayment: 620, insurance: 90, taxes: 95, maintenance: 60, inspectionDate: "2024-03-15", inspectionStatus: "passed", nextInspection: "2025-03-15", notes: "Great tenant, always pays on time.", rentHistory: [{ month: "2024-01", paid: true, amount: 1340 }, { month: "2024-02", paid: true, amount: 1340 }, { month: "2024-03", paid: true, amount: 1340 }, { month: "2024-04", paid: true, amount: 1340 }, { month: "2024-05", paid: true, amount: 1340 }, { month: "2024-06", paid: true, amount: 1340 }] },
-  { id: "2", address: "456 Oak Ave", city: "Detroit", state: "MI", zip: "48205", bedrooms: 3, bathrooms: 1, purchasePrice: 65000, purchaseDate: "2022-11-20", fmr: 1350, monthlyRent: 1350, status: "occupied", tenant: "Williams Family", leaseStart: "2023-01-01", leaseEnd: "2024-12-31", s8Score: 76, mortgagePayment: 480, insurance: 85, taxes: 72, maintenance: 80, inspectionDate: "2023-11-10", inspectionStatus: "passed", nextInspection: "2024-11-10", notes: "Minor plumbing fix needed.", rentHistory: [{ month: "2024-01", paid: true, amount: 1350 }, { month: "2024-02", paid: true, amount: 1350 }, { month: "2024-03", paid: false, amount: 0 }, { month: "2024-04", paid: true, amount: 1350 }, { month: "2024-05", paid: true, amount: 1350 }] },
+  { id:"1", address:"123 Maple St", city:"Cleveland", state:"OH", zip:"44105", bedrooms:3, bathrooms:1, purchasePrice:89000, purchaseDate:"2023-06-15", fmr:1340, monthlyRent:1340, status:"occupied", tenant:"Johnson Family", leaseStart:"2023-08-01", leaseEnd:"2024-07-31", s8Score:82, mortgagePayment:620, insurance:90, taxes:95, maintenance:60, inspectionDate:"2024-03-15", inspectionStatus:"passed", nextInspection:"2025-03-15", notes:"Great tenant.", rentHistory:[{month:"2024-01",paid:true,amount:1340},{month:"2024-02",paid:true,amount:1340},{month:"2024-03",paid:true,amount:1340}] },
+  { id:"2", address:"456 Oak Ave", city:"Detroit", state:"MI", zip:"48205", bedrooms:3, bathrooms:1, purchasePrice:65000, purchaseDate:"2022-11-20", fmr:1350, monthlyRent:1350, status:"occupied", tenant:"Williams Family", leaseStart:"2023-01-01", leaseEnd:"2024-12-31", s8Score:76, mortgagePayment:480, insurance:85, taxes:72, maintenance:80, inspectionDate:"2023-11-10", inspectionStatus:"passed", nextInspection:"2024-11-10", notes:"Minor plumbing fix needed.", rentHistory:[{month:"2024-01",paid:true,amount:1350},{month:"2024-02",paid:true,amount:1350},{month:"2024-03",paid:false,amount:0}] },
+  { id:"3", address:"789 Pine Rd", city:"Philadelphia", state:"PA", zip:"19132", bedrooms:4, bathrooms:2, purchasePrice:128000, purchaseDate:"2024-01-08", fmr:1740, monthlyRent:1740, status:"vacant", tenant:"", leaseStart:"", leaseEnd:"", s8Score:71, mortgagePayment:890, insurance:110, taxes:140, maintenance:50, inspectionDate:"", inspectionStatus:"pending", nextInspection:"2024-08-20", notes:"Awaiting HUD inspection.", rentHistory:[] },
 ];
 
-function calcCF(p) { return p.monthlyRent - p.mortgagePayment - p.insurance - p.taxes - p.maintenance; }
-function calcROI(p) { return ((calcCF(p) * 12) / p.purchasePrice * 100).toFixed(1); }
-function daysUntil(d) { if (!d) return null; return Math.ceil((new Date(d) - new Date()) / 86400000); }
+const cfCalc = p => p.monthlyRent - p.mortgagePayment - p.insurance - p.taxes - p.maintenance;
+const roiCalc = p => ((cfCalc(p) * 12) / p.purchasePrice * 100).toFixed(1);
+const daysUntil = s => s ? Math.ceil((new Date(s) - new Date()) / 86400000) : null;
+const fmtD = s => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+const fmtM = n => "$" + Number(n).toLocaleString();
 
-const EMPTY_PROP = { id: "", address: "", city: "", state: "", zip: "", bedrooms: 3, bathrooms: 1, purchasePrice: "", purchaseDate: "", fmr: "", monthlyRent: "", status: "vacant", tenant: "", leaseStart: "", leaseEnd: "", s8Score: "", mortgagePayment: "", insurance: "", taxes: "", maintenance: "", inspectionDate: "", inspectionStatus: "pending", nextInspection: "", notes: "", rentHistory: [] };
-
-function StatusBadge({ status }) {
-  const cfg = { occupied: { color: GREEN, bg: "rgba(0,229,155,0.12)", label: "Occupied" }, vacant: { color: ORANGE, bg: "rgba(244,166,54,0.12)", label: "Vacant" }, maintenance: { color: RED, bg: "rgba(224,92,92,0.12)", label: "Maintenance" } };
-  const c = cfg[status] || cfg.vacant;
-  return <span style={{ fontSize: 10, color: c.color, background: c.bg, border: `1px solid ${c.color}25`, padding: "3px 9px", borderRadius: 20, fontFamily: "'IBM Plex Mono',monospace" }}>{c.label}</span>;
-}
-
-function PortfolioTracker() {
-  const [properties, setProperties] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [showModal, setShowModal] = useState(false);
-  const [editProp, setEditProp] = useState(null);
+function PortfolioTab() {
+  const [props, setProps] = useState([]);
+  const [selId, setSelId] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editP, setEditP] = useState(null);
+  const [dtab, setDtab] = useState("overview");
   const [loaded, setLoaded] = useState(false);
-  const [detailTab, setDetailTab] = useState("overview");
+  const EMPTY = { id:"",address:"",city:"",state:"",zip:"",bedrooms:3,bathrooms:1,purchasePrice:"",purchaseDate:"",fmr:"",monthlyRent:"",status:"vacant",tenant:"",leaseStart:"",leaseEnd:"",s8Score:"",mortgagePayment:"",insurance:"",taxes:"",maintenance:"",inspectionDate:"",inspectionStatus:"pending",nextInspection:"",notes:"",rentHistory:[] };
+  const [form, setForm] = useState(EMPTY);
 
-  useEffect(() => {
-    loadPortfolio().then(data => {
-      const props = data?.length ? data : SAMPLE_PROPS;
-      setProperties(props);
-      setSelectedId(props[0]?.id || null);
-      setLoaded(true);
-    });
-  }, []);
+  useEffect(() => { storageGet("s8scout-portfolio").then(d => { const data = d && d.length > 0 ? d : SAMPLE_PROPS; setProps(data); setSelId(data[0]?.id); setLoaded(true); }); }, []);
+  useEffect(() => { if (loaded) storageSet("s8scout-portfolio", props); }, [props, loaded]);
 
-  useEffect(() => { if (loaded) savePortfolio(properties); }, [properties, loaded]);
-
-  const selected = properties.find(p => p.id === selectedId);
-  const totalRent = properties.filter(p => p.status === "occupied").reduce((a, p) => a + Number(p.monthlyRent), 0);
-  const totalCF = properties.reduce((a, p) => a + calcCF(p), 0);
-  const occupied = properties.filter(p => p.status === "occupied").length;
-
-  function addOrUpdate(prop) {
-    setProperties(ps => ps.find(p => p.id === prop.id) ? ps.map(p => p.id === prop.id ? prop : p) : [...ps, prop]);
-    setSelectedId(prop.id); setShowModal(false); setEditProp(null);
-  }
-  function deleteProp(id) {
-    if (!confirm("Remove this property?")) return;
-    setProperties(ps => ps.filter(p => p.id !== id));
-    if (selectedId === id) setSelectedId(properties.find(p => p.id !== id)?.id || null);
-  }
-
-  if (!loaded) return <div style={{ padding: 40, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace" }}>Loading portfolio...</div>;
+  const sel = props.find(p => p.id === selId);
+  const totalCF = props.reduce((a, p) => a + cfCalc(p), 0);
+  const occupied = props.filter(p => p.status === "occupied").length;
+  const totalRent = props.filter(p => p.status === "occupied").reduce((a, p) => a + p.monthlyRent, 0);
+  const updateP = p => setProps(ps => ps.map(x => x.id === p.id ? p : x));
+  const deleteP = id => { if (!confirm("Remove this property?")) return; setProps(ps => ps.filter(p => p.id !== id)); if (selId === id) setSelId(null); };
+  const saveP = p => { setProps(ps => ps.find(x => x.id === p.id) ? ps.map(x => x.id === p.id ? p : x) : [...ps, p]); setSelId(p.id); setShowAdd(false); setEditP(null); };
+  const setF = k => v => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <div style={{ padding: "24px 28px" }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 16 }}>
+        <KpiBox label="Total Units" value={props.length} color="rgba(255,255,255,0.8)" sub={`${occupied} occupied`} />
+        <KpiBox label="Monthly Income" value={fmtM(totalRent)} color="#00E59B" />
+        <KpiBox label="Total Cash Flow" value={`${totalCF >= 0 ? "+" : ""}${fmtM(totalCF)}`} color={totalCF >= 0 ? "#00E59B" : "#E05C5C"} />
+        <KpiBox label="Occupancy" value={`${props.length > 0 ? Math.round((occupied / props.length) * 100) : 0}%`} color="#A78BFA" />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
         <div>
-          <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>Portfolio Tracker</h2>
-          <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>{properties.length} properties · {occupied} occupied</p>
-        </div>
-        <button onClick={() => { setEditProp(null); setShowModal(true); }} style={{ background: `linear-gradient(135deg,${GREEN},#0AB87A)`, border: "none", borderRadius: 10, padding: "10px 18px", color: "#060A10", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>+ Add Property</button>
-      </div>
-
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 20 }}>
-        {[
-          ["Monthly Income", fmtMoney(totalRent), GREEN],
-          ["Monthly Cash Flow", `${totalCF >= 0 ? "+" : ""}${fmtMoney(totalCF)}`, totalCF >= 0 ? GREEN : RED],
-          ["Occupancy", `${properties.length ? Math.round(occupied / properties.length * 100) : 0}%`, PURPLE],
-          ["Total Units", properties.length, "rgba(255,255,255,0.7)"],
-        ].map(([label, value, color]) => (
-          <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: "14px 16px" }}>
-            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6 }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "'IBM Plex Mono',monospace" }}>{value}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace" }}>{props.length} PROPERTIES</span>
+            <Btn onClick={() => { setForm({ ...EMPTY }); setEditP(null); setShowAdd(true); }} style={{ padding: "7px 14px", fontSize: 12 }}>+ Add</Btn>
           </div>
-        ))}
-      </div>
-
-      {/* Two-column layout */}
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 14 }}>
-        {/* Property list */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {properties.map(p => {
-            const cf = calcCF(p);
-            const sel = selectedId === p.id;
+          {props.map(p => {
+            const cf = cfCalc(p), isSel = selId === p.id;
             return (
-              <div key={p.id} onClick={() => setSelectedId(p.id)} style={{ background: sel ? "rgba(0,229,155,0.06)" : "rgba(255,255,255,0.03)", border: `1px solid ${sel ? "rgba(0,229,155,0.25)" : "rgba(255,255,255,0.07)"}`, borderRadius: 12, padding: 16, cursor: "pointer" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{p.address}</div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <StatusBadge status={p.status} />
-                    <button onClick={e => { e.stopPropagation(); deleteProp(p.id); }} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.2)", cursor: "pointer", fontSize: 13 }} onMouseEnter={e => e.target.style.color = RED} onMouseLeave={e => e.target.style.color = "rgba(255,255,255,0.2)"}>✕</button>
-                  </div>
-                </div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 8 }}>{p.city}, {p.state} · {p.bedrooms}BR</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-                  {[["Cash Flow", `${cf >= 0 ? "+" : ""}${fmtMoney(cf)}`, cf >= 0 ? GREEN : RED], ["ROI", `${calcROI(p)}%`, PURPLE], ["Score", p.s8Score || "—", p.s8Score >= 70 ? GREEN : ORANGE]].map(([k, v, c]) => (
-                    <div key={k} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "6px 8px" }}>
-                      <div style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace" }}>{k}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: c, fontFamily: "'IBM Plex Mono',monospace" }}>{v}</div>
-                    </div>
-                  ))}
+              <div key={p.id} onClick={() => { setSelId(p.id); setDtab("overview"); }} style={{ ...S.card, cursor: "pointer", borderColor: isSel ? "rgba(0,229,155,0.3)" : "rgba(255,255,255,0.08)", background: isSel ? "rgba(0,229,155,0.05)" : "rgba(255,255,255,0.02)", padding: 14, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}><div style={{ fontSize: 13, fontWeight: 700 }}>{p.address}</div><Badge label={p.status} color={p.status === "occupied" ? "#00E59B" : "#F4A636"} /></div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginBottom: 7 }}>{p.city}, {p.state} · {p.bedrooms}BR</div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", color: cf >= 0 ? "#00E59B" : "#E05C5C" }}>{cf >= 0 ? "+" : ""}{fmtM(cf)}/mo</span>
+                  <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", color: "rgba(255,255,255,0.3)" }}>ROI {roiCalc(p)}%</span>
                 </div>
               </div>
             );
           })}
-          {properties.length === 0 && <div style={{ textAlign: "center", padding: 30, color: "rgba(255,255,255,0.2)", fontSize: 13, border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 12 }}>No properties yet</div>}
         </div>
-
-        {/* Detail */}
-        {selected ? (
-          <div style={{ background: "#0C1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, overflow: "hidden" }}>
-            <div style={{ padding: "18px 22px 0", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-                <div>
-                  <div style={{ fontSize: 17, fontWeight: 700 }}>{selected.address}</div>
-                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{selected.city}, {selected.state} {selected.zip} · {selected.bedrooms}BR/{selected.bathrooms}BA</div>
-                </div>
+        {sel ? (
+          <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
+            <div style={{ padding: "16px 20px 0", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div><div style={{ fontSize: 16, fontWeight: 700 }}>{sel.address}</div><div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{sel.city}, {sel.state} {sel.zip} · {sel.bedrooms}BR/{sel.bathrooms}BA</div></div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <StatusBadge status={selected.status} />
-                  <button onClick={() => { setEditProp(selected); setShowModal(true); }} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7, padding: "5px 11px", color: "rgba(255,255,255,0.45)", fontSize: 11, cursor: "pointer" }}>✏ Edit</button>
+                  <Btn onClick={() => { setForm({ ...sel }); setEditP(sel); setShowAdd(true); }} variant="ghost" style={{ padding: "6px 12px", fontSize: 11 }}>✏ Edit</Btn>
+                  <Btn onClick={() => deleteP(sel.id)} variant="danger" style={{ padding: "6px 12px", fontSize: 11 }}>✕</Btn>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 0 }}>
-                {["Overview", "Financials", "Inspection", "Rent History", "Notes"].map(t => (
-                  <button key={t} onClick={() => setDetailTab(t.toLowerCase())} style={{ background: "transparent", border: "none", borderBottom: `2px solid ${detailTab === t.toLowerCase() ? GREEN : "transparent"}`, color: detailTab === t.toLowerCase() ? GREEN : "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.06em", textTransform: "uppercase", padding: "7px 12px", cursor: "pointer" }}>{t}</button>
+              <div style={{ display: "flex" }}>
+                {["overview", "financials", "inspection", "rent history", "notes"].map(t => (
+                  <button key={t} onClick={() => setDtab(t)} style={{ background: "transparent", border: "none", borderBottom: `2px solid ${dtab === t ? "#00E59B" : "transparent"}`, color: dtab === t ? "#00E59B" : "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.06em", textTransform: "uppercase", padding: "7px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>{t}</button>
                 ))}
               </div>
             </div>
             <div style={{ padding: 20 }}>
-              {detailTab === "overview" && (
-                <div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 14 }}>
-                    {[["Monthly Cash Flow", `${calcCF(selected) >= 0 ? "+" : ""}${fmtMoney(calcCF(selected))}`, calcCF(selected) >= 0 ? GREEN : RED], ["Annual ROI", `${calcROI(selected)}%`, PURPLE], ["HUD FMR", `${fmtMoney(selected.fmr)}/mo`, BLUE], ["S8 Score", selected.s8Score || "—", selected.s8Score >= 70 ? GREEN : ORANGE]].map(([k, v, c]) => (
-                      <div key={k} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "12px 14px" }}>
-                        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 5 }}>{k}</div>
-                        <div style={{ fontSize: 20, fontWeight: 700, color: c, fontFamily: "'IBM Plex Mono',monospace" }}>{v}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {selected.tenant && <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.1em", marginBottom: 10 }}>Tenant & Lease</div><div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>{[["Tenant", selected.tenant], ["Lease Start", fmtDate(selected.leaseStart)], ["Lease End", fmtDate(selected.leaseEnd)]].map(([k, v]) => <div key={k}><div style={{ fontSize: 9, color: "rgba(255,255,255,0.28)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 2 }}>{k}</div><div style={{ fontSize: 13, fontWeight: 500 }}>{v}</div></div>)}</div></div>}
-                </div>
-              )}
-              {detailTab === "financials" && (
-                <div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Income</div>
-                      <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}><span style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>Section 8 Rent</span><span style={{ fontFamily: "'IBM Plex Mono',monospace", color: GREEN, fontWeight: 600 }}>{fmtMoney(selected.monthlyRent)}</span></div>
-                    </div>
-                    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>Expenses</div>
-                      {[["Mortgage", selected.mortgagePayment], ["Insurance", selected.insurance], ["Taxes", selected.taxes], ["Maintenance", selected.maintenance]].map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}><span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{k}</span><span style={{ fontFamily: "'IBM Plex Mono',monospace", color: RED, fontSize: 12 }}>−{fmtMoney(v)}</span></div>)}
-                    </div>
-                  </div>
-                  <div style={{ background: calcCF(selected) >= 0 ? "rgba(0,229,155,0.06)" : "rgba(224,92,92,0.06)", border: `1px solid ${calcCF(selected) >= 0 ? "rgba(0,229,155,0.2)" : "rgba(224,92,92,0.2)"}`, borderRadius: 10, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div><div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", textTransform: "uppercase", letterSpacing: "0.1em" }}>Net Monthly Cash Flow</div><div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginTop: 2 }}>Annual: {fmtMoney(calcCF(selected) * 12)} · ROI: {calcROI(selected)}%</div></div>
-                    <div style={{ fontSize: 28, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: calcCF(selected) >= 0 ? GREEN : RED }}>{calcCF(selected) >= 0 ? "+" : ""}{fmtMoney(calcCF(selected))}</div>
-                  </div>
-                </div>
-              )}
-              {detailTab === "inspection" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  {[["Last Inspection", fmtDate(selected.inspectionDate), selected.inspectionStatus === "passed" ? GREEN : ORANGE], ["Next Inspection", fmtDate(selected.nextInspection), daysUntil(selected.nextInspection) <= 30 ? ORANGE : "rgba(255,255,255,0.7)"]].map(([k, v, c]) => <div key={k} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 16 }}><div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>{k}</div><div style={{ fontSize: 18, fontWeight: 700, color: c }}>{v}</div>{k === "Next Inspection" && daysUntil(selected.nextInspection) !== null && <div style={{ fontSize: 11, color: c, marginTop: 4, fontFamily: "'IBM Plex Mono',monospace" }}>{daysUntil(selected.nextInspection) > 0 ? `${daysUntil(selected.nextInspection)} days away` : "Overdue"}</div>}</div>)}
-                </div>
-              )}
-              {detailTab === "rent history" && (
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{selected.rentHistory.filter(r => r.paid).length}/{selected.rentHistory.length} months paid</div>
-                    <button onClick={() => { const month = new Date().toISOString().slice(0, 7); if (!selected.rentHistory.find(r => r.month === month)) { const updated = { ...selected, rentHistory: [...selected.rentHistory, { month, paid: false, amount: 0 }] }; setProperties(ps => ps.map(p => p.id === updated.id ? updated : p)); } }} style={{ background: "rgba(0,229,155,0.1)", border: "1px solid rgba(0,229,155,0.2)", borderRadius: 7, color: GREEN, fontSize: 11, cursor: "pointer", padding: "5px 12px", fontFamily: "'IBM Plex Mono',monospace" }}>+ Add Month</button>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
-                    {[...selected.rentHistory].sort((a, b) => b.month.localeCompare(a.month)).map(r => {
-                      const idx = selected.rentHistory.findIndex(x => x.month === r.month);
-                      return <div key={r.month} onClick={() => { const updated = [...selected.rentHistory]; updated[idx] = { ...updated[idx], paid: !updated[idx].paid, amount: updated[idx].paid ? 0 : selected.monthlyRent }; setProperties(ps => ps.map(p => p.id === selected.id ? { ...selected, rentHistory: updated } : p)); }} style={{ background: r.paid ? "rgba(0,229,155,0.08)" : "rgba(224,92,92,0.07)", border: `1px solid ${r.paid ? "rgba(0,229,155,0.2)" : "rgba(224,92,92,0.18)"}`, borderRadius: 9, padding: 10, cursor: "pointer" }}><div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 4 }}>{new Date(r.month + "-01").toLocaleDateString("en-US", { month: "short", year: "numeric" })}</div><div style={{ fontSize: 13, fontWeight: 700, color: r.paid ? GREEN : RED, fontFamily: "'IBM Plex Mono',monospace" }}>{r.paid ? fmtMoney(r.amount) : "Unpaid"}</div></div>;
-                    })}
-                  </div>
-                </div>
-              )}
-              {detailTab === "notes" && (
-                <textarea value={selected.notes} onChange={e => setProperties(ps => ps.map(p => p.id === selected.id ? { ...selected, notes: e.target.value } : p))} placeholder="Notes about repairs, tenant issues, etc." style={{ width: "100%", minHeight: 160, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: 14, color: "#E8EDF5", fontSize: 13, lineHeight: 1.7, resize: "vertical", outline: "none", fontFamily: "inherit" }} />
-              )}
+              {dtab === "overview" && <div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}><KpiBox label="Cash Flow" value={`${cfCalc(sel) >= 0 ? "+" : ""}${fmtM(cfCalc(sel))}/mo`} color={cfCalc(sel) >= 0 ? "#00E59B" : "#E05C5C"} /><KpiBox label="Annual ROI" value={`${roiCalc(sel)}%`} color="#A78BFA" /><KpiBox label="HUD FMR" value={fmtM(sel.fmr) + "/mo"} color="#60A5FA" /><KpiBox label="S8 Score" value={sel.s8Score || "—"} color={sel.s8Score >= 70 ? "#00E59B" : "#F4A636"} /></div>{sel.tenant && <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>👤 {sel.tenant} · {fmtD(sel.leaseStart)} – {fmtD(sel.leaseEnd)}</div>}</div>}
+              {dtab === "financials" && <div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}><div style={S.card}><span style={{ ...S.label, color: "#00E59B" }}>Income</span><div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Monthly Rent</span><span style={{ color: "#00E59B", fontFamily: "'IBM Plex Mono',monospace" }}>{fmtM(sel.monthlyRent)}</span></div></div><div style={S.card}><span style={{ ...S.label, color: "#E05C5C" }}>Expenses</span>{[["Mortgage", sel.mortgagePayment], ["Insurance", sel.insurance], ["Taxes", sel.taxes], ["Maintenance", sel.maintenance]].map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}><span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{k}</span><span style={{ color: "#E05C5C", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12 }}>−{fmtM(v)}</span></div>)}</div></div><div style={{ ...S.card, marginTop: 10, background: cfCalc(sel) >= 0 ? "rgba(0,229,155,0.05)" : "rgba(224,92,92,0.05)", borderColor: cfCalc(sel) >= 0 ? "rgba(0,229,155,0.2)" : "rgba(224,92,92,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "rgba(255,255,255,0.6)" }}>Net Cash Flow</span><span style={{ fontSize: 26, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700, color: cfCalc(sel) >= 0 ? "#00E59B" : "#E05C5C" }}>{cfCalc(sel) >= 0 ? "+" : ""}{fmtM(cfCalc(sel))}</span></div></div>}
+              {dtab === "inspection" && <div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><KpiBox label="Last Inspection" value={fmtD(sel.inspectionDate)} color="rgba(255,255,255,0.7)" /><KpiBox label="Next Inspection" value={fmtD(sel.nextInspection)} color={daysUntil(sel.nextInspection) <= 30 ? "#F4A636" : "#E8EDF5"} sub={daysUntil(sel.nextInspection) !== null ? `${daysUntil(sel.nextInspection)} days` : ""} /></div><div style={{ marginTop: 12 }}><Badge label={sel.inspectionStatus.toUpperCase()} color={sel.inspectionStatus === "passed" ? "#00E59B" : "#F4A636"} /></div></div>}
+              {dtab === "rent history" && <div><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{sel.rentHistory.filter(r => r.paid).length}/{sel.rentHistory.length} paid</span><Btn onClick={() => { const now = new Date(); const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; if (!sel.rentHistory.find(r => r.month === month)) updateP({ ...sel, rentHistory: [...sel.rentHistory, { month, paid: false, amount: 0 }] }); }} style={{ padding: "5px 12px", fontSize: 11 }}>+ Month</Btn></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>{[...sel.rentHistory].sort((a, b) => b.month.localeCompare(a.month)).map(r => { const idx = sel.rentHistory.findIndex(x => x.month === r.month); return (<div key={r.month} onClick={() => { const u = [...sel.rentHistory]; u[idx] = { ...u[idx], paid: !u[idx].paid, amount: u[idx].paid ? 0 : sel.monthlyRent }; updateP({ ...sel, rentHistory: u }); }} style={{ ...S.card, padding: "9px 11px", cursor: "pointer", background: r.paid ? "rgba(0,229,155,0.07)" : "rgba(224,92,92,0.05)", borderColor: r.paid ? "rgba(0,229,155,0.2)" : "rgba(224,92,92,0.15)" }}><div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 3 }}>{new Date(r.month + "-01").toLocaleDateString("en-US", { month: "short", year: "numeric" })}</div><div style={{ fontSize: 13, fontWeight: 700, color: r.paid ? "#00E59B" : "#E05C5C", fontFamily: "'IBM Plex Mono',monospace" }}>{r.paid ? fmtM(r.amount) : "Unpaid"}</div></div>); })}</div></div>}
+              {dtab === "notes" && <textarea value={sel.notes} onChange={e => updateP({ ...sel, notes: e.target.value })} style={{ width: "100%", minHeight: 140, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14, color: "#E8EDF5", fontSize: 13, lineHeight: 1.65, resize: "vertical", outline: "none", fontFamily: "inherit" }} />}
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.2)", fontSize: 13, border: "1px dashed rgba(255,255,255,0.07)", borderRadius: 14, padding: 60 }}>Select a property to view details</div>
+          <div style={{ ...S.card, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.2)", fontSize: 13, borderStyle: "dashed" }}>Select a property to view details</div>
         )}
       </div>
-
-      {/* Add/Edit Modal */}
-      {showModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(6px)" }} onClick={e => e.target === e.currentTarget && setShowModal(false)}>
-          <div style={{ background: "#0C1220", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 26, width: "100%", maxWidth: 580, maxHeight: "88vh", overflowY: "auto" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20 }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>{editProp?.id ? "Edit Property" : "Add Property"}</div>
-              <button onClick={() => setShowModal(false)} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 18 }}>✕</button>
+      {showAdd && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(6px)" }} onClick={e => e.target === e.currentTarget && setShowAdd(false)}>
+          <div style={{ background: "#0C1220", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, padding: 26, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20 }}><div style={{ fontSize: 16, fontWeight: 700 }}>{editP ? "Edit" : "Add"} Property</div><button onClick={() => setShowAdd(false)} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16 }}>✕</button></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Address" value={form.address} onChange={setF("address")} placeholder="123 Maple St" />
+              <div style={{ display: "flex", gap: 10 }}><div style={{ flex: 2 }}><Field label="City" value={form.city} onChange={setF("city")} /></div><div style={{ flex: 1 }}><Field label="State" value={form.state} onChange={setF("state")} /></div><div style={{ flex: 1 }}><Field label="ZIP" value={form.zip} onChange={setF("zip")} /></div></div>
+              <div style={{ display: "flex", gap: 10 }}><div style={{ flex: 1 }}><Field label="Purchase Price" value={form.purchasePrice} onChange={setF("purchasePrice")} type="number" /></div><div style={{ flex: 1 }}><Field label="HUD FMR" value={form.fmr} onChange={setF("fmr")} type="number" /></div><div style={{ flex: 1 }}><Field label="Monthly Rent" value={form.monthlyRent} onChange={setF("monthlyRent")} type="number" /></div></div>
+              <div style={{ display: "flex", gap: 10 }}><div style={{ flex: 1 }}><Field label="Mortgage" value={form.mortgagePayment} onChange={setF("mortgagePayment")} type="number" /></div><div style={{ flex: 1 }}><Field label="Insurance" value={form.insurance} onChange={setF("insurance")} type="number" /></div><div style={{ flex: 1 }}><Field label="Taxes" value={form.taxes} onChange={setF("taxes")} type="number" /></div><div style={{ flex: 1 }}><Field label="Maintenance" value={form.maintenance} onChange={setF("maintenance")} type="number" /></div></div>
+              <Field label="Tenant Name" value={form.tenant} onChange={setF("tenant")} />
+              <div style={{ display: "flex", gap: 10 }}><div style={{ flex: 1 }}><Field label="Lease Start" value={form.leaseStart} onChange={setF("leaseStart")} type="date" /></div><div style={{ flex: 1 }}><Field label="Lease End" value={form.leaseEnd} onChange={setF("leaseEnd")} type="date" /></div><div style={{ flex: 1 }}><Field label="Next Inspection" value={form.nextInspection} onChange={setF("nextInspection")} type="date" /></div></div>
+              <div style={{ display: "flex", gap: 10, marginTop: 8 }}><Btn onClick={() => setShowAdd(false)} variant="ghost" style={{ flex: 1 }}>Cancel</Btn><Btn onClick={() => saveP({ ...form, id: form.id || String(Date.now()) })} style={{ flex: 2 }}>{editP ? "Save Changes" : "Add Property"}</Btn></div>
             </div>
-            <PropertyForm initial={editProp} onSave={addOrUpdate} onCancel={() => setShowModal(false)} />
           </div>
         </div>
       )}
@@ -581,213 +518,109 @@ function PortfolioTracker() {
   );
 }
 
-function PropertyForm({ initial, onSave, onCancel }) {
-  const [form, setForm] = useState({ ...EMPTY_PROP, ...initial });
-  const set = k => v => setForm(f => ({ ...f, [k]: v }));
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Input label="Street Address" value={form.address} onChange={set("address")} placeholder="123 Maple St" />
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        <Input label="City" value={form.city} onChange={set("city")} placeholder="Cleveland" half />
-        <Input label="State" value={form.state} onChange={set("state")} placeholder="OH" half />
-        <Input label="ZIP" value={form.zip} onChange={set("zip")} placeholder="44105" half />
-        <Select label="Status" value={form.status} onChange={set("status")} options={[{value:"occupied",label:"Occupied"},{value:"vacant",label:"Vacant"},{value:"maintenance",label:"Maintenance"}]} half />
-        <Input label="Bedrooms" value={form.bedrooms} onChange={set("bedrooms")} type="number" half />
-        <Input label="Bathrooms" value={form.bathrooms} onChange={set("bathrooms")} type="number" half />
-        <Input label="Purchase Price" value={form.purchasePrice} onChange={set("purchasePrice")} type="number" placeholder="89000" half />
-        <Input label="Purchase Date" value={form.purchaseDate} onChange={set("purchaseDate")} type="date" half />
-        <Input label="HUD FMR ($)" value={form.fmr} onChange={set("fmr")} type="number" placeholder="1340" half />
-        <Input label="Monthly Rent ($)" value={form.monthlyRent} onChange={set("monthlyRent")} type="number" placeholder="1340" half />
-        <Input label="Mortgage ($)" value={form.mortgagePayment} onChange={set("mortgagePayment")} type="number" half />
-        <Input label="Insurance ($)" value={form.insurance} onChange={set("insurance")} type="number" half />
-        <Input label="Taxes ($)" value={form.taxes} onChange={set("taxes")} type="number" half />
-        <Input label="Maintenance ($)" value={form.maintenance} onChange={set("maintenance")} type="number" half />
-        <Input label="Tenant Name" value={form.tenant} onChange={set("tenant")} placeholder="Johnson Family" />
-        <Input label="Lease Start" value={form.leaseStart} onChange={set("leaseStart")} type="date" half />
-        <Input label="Lease End" value={form.leaseEnd} onChange={set("leaseEnd")} type="date" half />
-        <Input label="S8 Score" value={form.s8Score} onChange={set("s8Score")} type="number" placeholder="82" half />
-        <Input label="Next Inspection" value={form.nextInspection} onChange={set("nextInspection")} type="date" half />
-      </div>
-      <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-        <button onClick={onCancel} style={{ flex: 1, background: "transparent", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 9, padding: 11, color: "rgba(255,255,255,0.45)", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-        <button onClick={() => onSave({ ...form, id: form.id || String(Date.now()) })} style={{ flex: 2, background: `linear-gradient(135deg,${GREEN},#0AB87A)`, border: "none", borderRadius: 9, padding: 11, color: "#060A10", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>{initial?.id ? "Save Changes" : "Add Property"}</button>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// MARKET EXPLORER (inline)
-// ═══════════════════════════════════════════════════════════════
-
-const MARKETS = [
-  { id: 1, city: "Cleveland", state: "OH", metro: "Cleveland-Elyria, OH", region: "Midwest", fmr3: 1340, medianPrice: 89000, crimeIndex: 58, voucherDemand: "HIGH", vouchers: 12400, landlordFriendly: true, tags: ["cashflow", "affordable", "high-demand"] },
-  { id: 2, city: "Detroit", state: "MI", metro: "Detroit-Warren-Dearborn, MI", region: "Midwest", fmr3: 1350, medianPrice: 72000, crimeIndex: 52, voucherDemand: "HIGH", vouchers: 18900, landlordFriendly: true, tags: ["cashflow", "affordable", "high-demand"] },
-  { id: 3, city: "Memphis", state: "TN", metro: "Memphis, TN-MS-AR", region: "South", fmr3: 1180, medianPrice: 105000, crimeIndex: 44, voucherDemand: "HIGH", vouchers: 14200, landlordFriendly: true, tags: ["cashflow", "affordable"] },
-  { id: 4, city: "Birmingham", state: "AL", metro: "Birmingham-Hoover, AL", region: "South", fmr3: 1090, medianPrice: 118000, crimeIndex: 46, voucherDemand: "HIGH", vouchers: 9800, landlordFriendly: true, tags: ["cashflow", "affordable"] },
-  { id: 5, city: "Indianapolis", state: "IN", metro: "Indianapolis-Carmel-Anderson, IN", region: "Midwest", fmr3: 1210, medianPrice: 155000, crimeIndex: 55, voucherDemand: "HIGH", vouchers: 16100, landlordFriendly: true, tags: ["cashflow", "growing"] },
-  { id: 6, city: "Kansas City", state: "MO", metro: "Kansas City, MO-KS", region: "Midwest", fmr3: 1250, medianPrice: 172000, crimeIndex: 53, voucherDemand: "MEDIUM", vouchers: 10500, landlordFriendly: true, tags: ["balanced", "growing"] },
-  { id: 7, city: "St. Louis", state: "MO", metro: "St. Louis, MO-IL", region: "Midwest", fmr3: 1100, medianPrice: 130000, crimeIndex: 47, voucherDemand: "HIGH", vouchers: 13600, landlordFriendly: true, tags: ["cashflow", "affordable"] },
-  { id: 8, city: "Baltimore", state: "MD", metro: "Baltimore-Columbia-Towson, MD", region: "Northeast", fmr3: 1620, medianPrice: 145000, crimeIndex: 45, voucherDemand: "HIGH", vouchers: 21000, landlordFriendly: false, tags: ["high-fmr", "high-demand"] },
-  { id: 9, city: "Philadelphia", state: "PA", metro: "Philadelphia-Camden-Wilmington", region: "Northeast", fmr3: 1480, medianPrice: 175000, crimeIndex: 50, voucherDemand: "HIGH", vouchers: 24300, landlordFriendly: false, tags: ["high-fmr", "high-demand"] },
-  { id: 10, city: "Columbus", state: "OH", metro: "Columbus, OH", region: "Midwest", fmr3: 1230, medianPrice: 198000, crimeIndex: 58, voucherDemand: "MEDIUM", vouchers: 11200, landlordFriendly: true, tags: ["balanced", "growing"] },
-  { id: 11, city: "Milwaukee", state: "WI", metro: "Milwaukee-Waukesha, WI", region: "Midwest", fmr3: 1160, medianPrice: 138000, crimeIndex: 49, voucherDemand: "HIGH", vouchers: 12800, landlordFriendly: true, tags: ["cashflow", "high-demand"] },
-  { id: 12, city: "Atlanta", state: "GA", metro: "Atlanta-Sandy Springs-Roswell, GA", region: "South", fmr3: 1640, medianPrice: 285000, crimeIndex: 50, voucherDemand: "HIGH", vouchers: 29800, landlordFriendly: true, tags: ["high-fmr", "growing"] },
-  { id: 13, city: "Houston", state: "TX", metro: "Houston-The Woodlands-Sugar Land, TX", region: "South", fmr3: 1450, medianPrice: 195000, crimeIndex: 53, voucherDemand: "HIGH", vouchers: 38500, landlordFriendly: true, tags: ["balanced", "high-demand"] },
-  { id: 14, city: "Dallas", state: "TX", metro: "Dallas-Fort Worth-Arlington, TX", region: "South", fmr3: 1620, medianPrice: 278000, crimeIndex: 55, voucherDemand: "HIGH", vouchers: 31200, landlordFriendly: true, tags: ["high-fmr", "growing"] },
-  { id: 15, city: "Louisville", state: "KY", metro: "Louisville-Jefferson County, KY-IN", region: "South", fmr3: 1100, medianPrice: 168000, crimeIndex: 55, voucherDemand: "MEDIUM", vouchers: 8600, landlordFriendly: true, tags: ["balanced", "affordable"] },
-  { id: 16, city: "Jacksonville", state: "FL", metro: "Jacksonville, FL", region: "South", fmr3: 1380, medianPrice: 230000, crimeIndex: 52, voucherDemand: "MEDIUM", vouchers: 9700, landlordFriendly: true, tags: ["balanced", "growing"] },
-  { id: 17, city: "Pittsburgh", state: "PA", metro: "Pittsburgh, PA", region: "Northeast", fmr3: 1080, medianPrice: 160000, crimeIndex: 59, voucherDemand: "MEDIUM", vouchers: 9200, landlordFriendly: false, tags: ["affordable", "balanced"] },
-  { id: 18, city: "Buffalo", state: "NY", metro: "Buffalo-Cheektowaga, NY", region: "Northeast", fmr3: 1120, medianPrice: 142000, crimeIndex: 54, voucherDemand: "HIGH", vouchers: 10400, landlordFriendly: false, tags: ["cashflow", "high-demand"] },
-  { id: 19, city: "Oklahoma City", state: "OK", metro: "Oklahoma City, OK", region: "South", fmr3: 1020, medianPrice: 152000, crimeIndex: 52, voucherDemand: "MEDIUM", vouchers: 7800, landlordFriendly: true, tags: ["affordable", "balanced"] },
-  { id: 20, city: "Cincinnati", state: "OH", metro: "Cincinnati, OH-KY-IN", region: "Midwest", fmr3: 1140, medianPrice: 160000, crimeIndex: 56, voucherDemand: "MEDIUM", vouchers: 8900, landlordFriendly: true, tags: ["balanced", "affordable"] },
+// ══════════════════════════════════════════════════════════════════════════
+// MARKETS TAB
+// ══════════════════════════════════════════════════════════════════════════
+const MARKETS_DATA = [
+  {id:1,city:"Cleveland",state:"OH",region:"Midwest",fmr3:1340,medianPrice:89000,crimeIndex:58,voucherDemand:"HIGH",vouchers:12400,landlordFriendly:true},
+  {id:2,city:"Detroit",state:"MI",region:"Midwest",fmr3:1350,medianPrice:72000,crimeIndex:52,voucherDemand:"HIGH",vouchers:18900,landlordFriendly:true},
+  {id:3,city:"Memphis",state:"TN",region:"South",fmr3:1180,medianPrice:105000,crimeIndex:44,voucherDemand:"HIGH",vouchers:14200,landlordFriendly:true},
+  {id:4,city:"Birmingham",state:"AL",region:"South",fmr3:1090,medianPrice:118000,crimeIndex:46,voucherDemand:"HIGH",vouchers:9800,landlordFriendly:true},
+  {id:5,city:"Indianapolis",state:"IN",region:"Midwest",fmr3:1210,medianPrice:155000,crimeIndex:55,voucherDemand:"HIGH",vouchers:16100,landlordFriendly:true},
+  {id:6,city:"Kansas City",state:"MO",region:"Midwest",fmr3:1250,medianPrice:172000,crimeIndex:53,voucherDemand:"MEDIUM",vouchers:10500,landlordFriendly:true},
+  {id:7,city:"St. Louis",state:"MO",region:"Midwest",fmr3:1100,medianPrice:130000,crimeIndex:47,voucherDemand:"HIGH",vouchers:13600,landlordFriendly:true},
+  {id:8,city:"Baltimore",state:"MD",region:"Northeast",fmr3:1620,medianPrice:145000,crimeIndex:45,voucherDemand:"HIGH",vouchers:21000,landlordFriendly:false},
+  {id:9,city:"Philadelphia",state:"PA",region:"Northeast",fmr3:1480,medianPrice:175000,crimeIndex:50,voucherDemand:"HIGH",vouchers:24300,landlordFriendly:false},
+  {id:10,city:"Columbus",state:"OH",region:"Midwest",fmr3:1230,medianPrice:198000,crimeIndex:58,voucherDemand:"MEDIUM",vouchers:11200,landlordFriendly:true},
+  {id:11,city:"Milwaukee",state:"WI",region:"Midwest",fmr3:1160,medianPrice:138000,crimeIndex:49,voucherDemand:"HIGH",vouchers:12800,landlordFriendly:true},
+  {id:12,city:"Atlanta",state:"GA",region:"South",fmr3:1640,medianPrice:285000,crimeIndex:50,voucherDemand:"HIGH",vouchers:29800,landlordFriendly:true},
+  {id:13,city:"Houston",state:"TX",region:"South",fmr3:1450,medianPrice:195000,crimeIndex:53,voucherDemand:"HIGH",vouchers:38500,landlordFriendly:true},
+  {id:14,city:"Dallas",state:"TX",region:"South",fmr3:1620,medianPrice:278000,crimeIndex:55,voucherDemand:"HIGH",vouchers:31200,landlordFriendly:true},
+  {id:15,city:"Louisville",state:"KY",region:"South",fmr3:1100,medianPrice:168000,crimeIndex:55,voucherDemand:"MEDIUM",vouchers:8600,landlordFriendly:true},
 ];
 
-function mktScore(m) {
-  const rtp = (m.fmr3 / m.medianPrice) * 100;
-  return Math.round(Math.min(40, (rtp / 2) * 40) + (m.crimeIndex / 100) * 25 + (m.voucherDemand === "HIGH" ? 20 : 13) + Math.min(15, (300000 / m.medianPrice) * 10));
-}
+const mktScore = m => { const rtp = (m.fmr3 / m.medianPrice) * 100; return Math.round(Math.min(40, (rtp / 2) * 40) + (m.crimeIndex / 100) * 25 + (m.voucherDemand === "HIGH" ? 20 : 13) + Math.min(15, (300000 / m.medianPrice) * 10)); };
 
-async function fetchMarketAI(market) {
-  const score = mktScore(market);
-  const rtp = ((market.fmr3 / market.medianPrice) * 100).toFixed(2);
-  const prompt = `Section 8 real estate market analyst. Deep analysis for ${market.city}, ${market.state}. S8 Score: ${score}/100, FMR 3BR: $${market.fmr3}, Med Price: $${market.medianPrice.toLocaleString()}, RTP: ${rtp}%, Voucher Demand: ${market.voucherDemand}, Landlord-Friendly: ${market.landlordFriendly}.
-Return ONLY this JSON (no markdown):
-{"summary":"2-3 sentences","bestNeighborhoods":["n1","n2","n3"],"pros":["p1","p2","p3"],"cons":["c1","c2"],"investorTip":"2 sentences","outlook":"bullish"|"neutral"|"bearish","cashFlowEstimate":{"low":number,"high":number},"competition":"low"|"medium"|"high"}`;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 700, messages: [{ role: "user", content: prompt }] })
-  });
-  const data = await res.json();
-  const text = data.content.map(b => b.text || "").join("");
-  const m2 = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
-  return JSON.parse(m2[0]);
-}
-
-function MarketExplorer() {
+function MarketsTab() {
   const [sortBy, setSortBy] = useState("score");
   const [filterRegion, setFilterRegion] = useState("all");
-  const [filterDemand, setFilterDemand] = useState("all");
-  const [filterLL, setFilterLL] = useState(false);
-  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
-  const [mktAnalysis, setMktAnalysis] = useState(null);
-  const [mktLoading, setMktLoading] = useState(false);
+  const [analysis, setAnalysis] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  const scored = MARKETS.map(m => ({ ...m, score: mktScore(m), rtp: parseFloat(((m.fmr3 / m.medianPrice) * 100).toFixed(2)) }));
-  const filtered = scored.filter(m => {
-    if (filterRegion !== "all" && m.region !== filterRegion) return false;
-    if (filterDemand !== "all" && m.voucherDemand !== filterDemand) return false;
-    if (filterLL && !m.landlordFriendly) return false;
-    if (search && !`${m.city} ${m.state}`.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  }).sort((a, b) => sortBy === "score" ? b.score - a.score : sortBy === "rtp" ? b.rtp - a.rtp : sortBy === "fmr" ? b.fmr3 - a.fmr3 : sortBy === "price" ? a.medianPrice - b.medianPrice : b.vouchers - a.vouchers);
+  const scored = MARKETS_DATA.map(m => ({ ...m, score: mktScore(m), rtp: ((m.fmr3 / m.medianPrice) * 100).toFixed(2) }));
+  const filtered = scored.filter(m => filterRegion === "all" || m.region === filterRegion);
+  const sorted = [...filtered].sort((a, b) => sortBy === "score" ? b.score - a.score : sortBy === "rtp" ? b.rtp - a.rtp : sortBy === "fmr" ? b.fmr3 - a.fmr3 : a.medianPrice - b.medianPrice);
 
-  useEffect(() => {
-    if (!selected) return;
-    setMktAnalysis(null); setMktLoading(true);
-    fetchMarketAI(selected).then(a => { setMktAnalysis(a); setMktLoading(false); }).catch(() => setMktLoading(false));
-  }, [selected?.id]);
-
-  const mktVerdict = s => s >= 78 ? { label: "TOP MARKET", color: GREEN } : s >= 64 ? { label: "STRONG", color: "#4CAF7D" } : { label: "MODERATE", color: ORANGE };
+  async function selectMarket(m) {
+    setSelected(m); setAnalysis(null); setLoading(true);
+    try {
+      const data = await apiFetch("market", { city: m.city, state: m.state, fmr3: m.fmr3, medianPrice: m.medianPrice, vouchers: m.vouchers, voucherDemand: m.voucherDemand, score: m.score, landlordFriendly: m.landlordFriendly });
+      setAnalysis(data);
+    } catch { setAnalysis(null); }
+    setLoading(false);
+  }
 
   return (
-    <div style={{ padding: "24px 28px" }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 4 }}>Market Explorer</h2>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>Rank and compare {scored.length} US markets for Section 8 investment opportunity</p>
-      </div>
-
-      {/* Filters */}
-      <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search city..." style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 18, padding: "5px 13px", color: "#fff", fontSize: 12, fontFamily: "'IBM Plex Mono',monospace", outline: "none", width: 150 }} />
-        {["all", "Midwest", "South", "Northeast"].map(r => <button key={r} onClick={() => setFilterRegion(r)} style={{ background: filterRegion === r ? "rgba(0,229,155,0.15)" : "transparent", border: `1px solid ${filterRegion === r ? "rgba(0,229,155,0.3)" : "rgba(255,255,255,0.09)"}`, borderRadius: 18, padding: "5px 13px", color: filterRegion === r ? GREEN : "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>{r === "all" ? "All Regions" : r}</button>)}
-        <button onClick={() => setFilterDemand(filterDemand === "HIGH" ? "all" : "HIGH")} style={{ background: filterDemand === "HIGH" ? "rgba(0,229,155,0.15)" : "transparent", border: `1px solid ${filterDemand === "HIGH" ? "rgba(0,229,155,0.3)" : "rgba(255,255,255,0.09)"}`, borderRadius: 18, padding: "5px 13px", color: filterDemand === "HIGH" ? GREEN : "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>High Demand</button>
-        <button onClick={() => setFilterLL(f => !f)} style={{ background: filterLL ? "rgba(0,229,155,0.15)" : "transparent", border: `1px solid ${filterLL ? "rgba(0,229,155,0.3)" : "rgba(255,255,255,0.09)"}`, borderRadius: 18, padding: "5px 13px", color: filterLL ? GREEN : "rgba(255,255,255,0.4)", fontSize: 11, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>LL-Friendly</button>
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        {["all","Midwest","South","Northeast"].map(r => (
+          <button key={r} onClick={() => setFilterRegion(r)} style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", background: filterRegion === r ? "rgba(0,229,155,0.15)" : "rgba(255,255,255,0.04)", border: `1px solid ${filterRegion === r ? "rgba(0,229,155,0.3)" : "rgba(255,255,255,0.08)"}`, color: filterRegion === r ? "#00E59B" : "rgba(255,255,255,0.4)", borderRadius: 20, padding: "5px 14px", cursor: "pointer" }}>{r === "all" ? "All Regions" : r}</button>
+        ))}
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-          {[["score", "Score"], ["rtp", "Rent/Price"], ["fmr", "FMR"], ["price", "Price↑"], ["vouchers", "Vouchers"]].map(([v, l]) => <button key={v} onClick={() => setSortBy(v)} style={{ background: sortBy === v ? "rgba(0,229,155,0.12)" : "transparent", border: `1px solid ${sortBy === v ? "rgba(0,229,155,0.25)" : "rgba(255,255,255,0.08)"}`, borderRadius: 6, padding: "4px 9px", color: sortBy === v ? GREEN : "rgba(255,255,255,0.35)", fontSize: 11, cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace" }}>{l}</button>)}
+          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", fontFamily: "'IBM Plex Mono',monospace", alignSelf: "center" }}>SORT:</span>
+          {[["score","Score"],["rtp","Rent/Price"],["fmr","FMR"],["price","Price ↑"]].map(([v, l]) => (
+            <button key={v} onClick={() => setSortBy(v)} style={{ fontSize: 11, fontFamily: "'IBM Plex Mono',monospace", background: sortBy === v ? "rgba(0,229,155,0.12)" : "transparent", border: `1px solid ${sortBy === v ? "rgba(0,229,155,0.25)" : "rgba(255,255,255,0.08)"}`, color: sortBy === v ? "#00E59B" : "rgba(255,255,255,0.35)", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>{l}</button>
+          ))}
         </div>
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 400px" : "1fr", gap: 14 }}>
-        {/* Table */}
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "28px 40px 1fr 80px 80px 70px 80px 80px", gap: 10, padding: "6px 14px", marginBottom: 6 }}>
-            {["#", "SCR", "MARKET", "FMR", "PRICE", "RTP", "DEMAND", "VERDICT"].map(h => <div key={h} style={{ fontSize: 9, color: "rgba(255,255,255,0.22)", letterSpacing: "0.1em", fontFamily: "'IBM Plex Mono',monospace", textAlign: h === "#" || h === "SCR" ? "center" : h === "MARKET" ? "left" : "right" }}>{h}</div>)}
+          <div style={{ display: "grid", gridTemplateColumns: "32px 1fr 80px 80px 68px 90px", gap: 10, padding: "6px 14px", marginBottom: 4 }}>
+            {["#","MARKET","FMR 3BR","MED PRICE","RTP","VERDICT"].map(h => <div key={h} style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", letterSpacing: "0.1em", fontFamily: "'IBM Plex Mono',monospace" }}>{h}</div>)}
           </div>
-          {filtered.map((m, i) => {
-            const v = mktVerdict(m.score);
-            const sel = selected?.id === m.id;
+          {sorted.map((m, i) => {
+            const isSel = selected?.id === m.id;
+            const v = m.score >= 72 ? { label: "TOP MARKET", color: "#00E59B" } : m.score >= 58 ? { label: "STRONG", color: "#4CAF7D" } : { label: "MODERATE", color: "#F4A636" };
             return (
-              <div key={m.id} onClick={() => setSelected(s => s?.id === m.id ? null : m)} style={{ display: "grid", gridTemplateColumns: "28px 40px 1fr 80px 80px 70px 80px 80px", gap: 10, padding: "12px 14px", background: sel ? "rgba(0,229,155,0.06)" : "rgba(255,255,255,0.02)", border: `1px solid ${sel ? "rgba(0,229,155,0.22)" : "rgba(255,255,255,0.06)"}`, borderRadius: 10, cursor: "pointer", marginBottom: 5, alignItems: "center" }}
-                onMouseEnter={e => { if (!sel) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-                onMouseLeave={e => { if (!sel) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.22)", fontFamily: "'IBM Plex Mono',monospace", textAlign: "center" }}>#{i + 1}</div>
-                <div style={{ textAlign: "center", fontSize: 15, fontWeight: 800, color: m.score >= 70 ? GREEN : ORANGE, fontFamily: "'IBM Plex Mono',monospace" }}>{m.score}</div>
-                <div><div style={{ fontSize: 13, fontWeight: 700 }}>{m.city}, {m.state}{m.landlordFriendly && <span style={{ fontSize: 9, color: GREEN, background: "rgba(0,229,155,0.1)", padding: "1px 6px", borderRadius: 4, marginLeft: 6, fontFamily: "'IBM Plex Mono',monospace" }}>LL✓</span>}</div><div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace" }}>{m.region}</div></div>
-                <div style={{ textAlign: "right", fontSize: 13, color: GREEN, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>${m.fmr3.toLocaleString()}</div>
-                <div style={{ textAlign: "right", fontSize: 13, color: "rgba(255,255,255,0.7)", fontFamily: "'IBM Plex Mono',monospace" }}>${(m.medianPrice / 1000).toFixed(0)}K</div>
-                <div style={{ textAlign: "right", fontSize: 13, color: m.rtp >= 1.0 ? GREEN : ORANGE, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{m.rtp}%</div>
-                <div style={{ textAlign: "right", fontSize: 10, color: m.voucherDemand === "HIGH" ? GREEN : ORANGE, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600 }}>{m.voucherDemand}</div>
-                <div style={{ textAlign: "right" }}><span style={{ fontSize: 10, color: v.color, fontFamily: "'IBM Plex Mono',monospace", fontWeight: 700 }}>{v.label}</span></div>
+              <div key={m.id} onClick={() => isSel ? setSelected(null) : selectMarket(m)} style={{ display: "grid", gridTemplateColumns: "32px 1fr 80px 80px 68px 90px", gap: 10, padding: "12px 14px", background: isSel ? "rgba(0,229,155,0.06)" : "rgba(255,255,255,0.02)", border: `1px solid ${isSel ? "rgba(0,229,155,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 10, marginBottom: 6, cursor: "pointer", alignItems: "center" }}>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", fontFamily: "'IBM Plex Mono',monospace" }}>#{i + 1}</div>
+                <div><div style={{ fontSize: 13, fontWeight: 700 }}>{m.city}, {m.state}</div><div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace" }}>{m.region}{m.landlordFriendly ? " · LL-friendly" : ""}</div></div>
+                <div style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", color: "#00E59B", fontWeight: 600 }}>${m.fmr3.toLocaleString()}</div>
+                <div style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", color: "rgba(255,255,255,0.7)" }}>${(m.medianPrice / 1000).toFixed(0)}K</div>
+                <div style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", color: parseFloat(m.rtp) >= 1 ? "#00E59B" : "#F4A636", fontWeight: 600 }}>{m.rtp}%</div>
+                <Badge label={v.label} color={v.color} />
               </div>
             );
           })}
         </div>
-
-        {/* Detail */}
         {selected && (
-          <div style={{ background: "#0C1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, overflow: "hidden", position: "sticky", top: 0, maxHeight: "calc(100vh - 120px)", overflowY: "auto" }}>
-            <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                <div><div style={{ fontSize: 18, fontWeight: 800 }}>{selected.city}, {selected.state}</div><div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", fontFamily: "'IBM Plex Mono',monospace" }}>{selected.metro}</div></div>
-                <button onClick={() => setSelected(null)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "4px 9px", fontSize: 11 }}>✕</button>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                {[["S8 Score", selected.score, selected.score >= 70 ? GREEN : ORANGE], ["HUD FMR", `$${selected.fmr3.toLocaleString()}`, GREEN], ["Rent/Price", `${selected.rtp}%`, selected.rtp >= 1.0 ? GREEN : ORANGE]].map(([k, v, c]) => <div key={k} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}><div style={{ fontSize: 9, color: "rgba(255,255,255,0.28)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 3 }}>{k}</div><div style={{ fontSize: 16, fontWeight: 700, color: c, fontFamily: "'IBM Plex Mono',monospace" }}>{v}</div></div>)}
-              </div>
+          <div style={{ ...S.card, position: "sticky", top: 16, maxHeight: "calc(100vh - 80px)", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+              <div><div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{selected.city}, <span style={{ color: "rgba(255,255,255,0.4)" }}>{selected.state}</span></div><div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginTop: 2 }}>S8 Score: {selected.score}/100</div></div>
+              <button onClick={() => setSelected(null)} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 16 }}>✕</button>
             </div>
-            <div style={{ padding: 18 }}>
-              {mktLoading ? (
-                <div style={{ display: "flex", gap: 10, alignItems: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>
-                  <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.1)", borderTopColor: GREEN, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                  Loading AI analysis...
-                </div>
-              ) : mktAnalysis && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.65)", lineHeight: 1.65, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: 14 }}>{mktAnalysis.summary}</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div style={{ background: "rgba(0,229,155,0.06)", border: "1px solid rgba(0,229,155,0.12)", borderRadius: 10, padding: 12 }}>
-                      <div style={{ fontSize: 9, color: GREEN, fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.1em", marginBottom: 8 }}>EST. CASH FLOW</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: GREEN, fontFamily: "'IBM Plex Mono',monospace" }}>${mktAnalysis.cashFlowEstimate.low}–${mktAnalysis.cashFlowEstimate.high}/mo</div>
-                    </div>
-                    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 12 }}>
-                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", letterSpacing: "0.1em", marginBottom: 8 }}>COMPETITION</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: mktAnalysis.competition === "low" ? GREEN : ORANGE, fontFamily: "'IBM Plex Mono',monospace", textTransform: "uppercase" }}>{mktAnalysis.competition}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div style={{ background: "rgba(0,229,155,0.04)", border: "1px solid rgba(0,229,155,0.1)", borderRadius: 10, padding: 12 }}>
-                      <div style={{ fontSize: 9, color: GREEN, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 8 }}>✓ PROS</div>
-                      {mktAnalysis.pros.map((p, i) => <div key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4, display: "flex", gap: 5 }}><span style={{ color: GREEN, flexShrink: 0 }}>→</span>{p}</div>)}
-                    </div>
-                    <div style={{ background: "rgba(244,166,54,0.04)", border: "1px solid rgba(244,166,54,0.1)", borderRadius: 10, padding: 12 }}>
-                      <div style={{ fontSize: 9, color: ORANGE, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 8 }}>⚠ WATCH</div>
-                      {mktAnalysis.cons.map((c, i) => <div key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4, display: "flex", gap: 5 }}><span style={{ color: ORANGE, flexShrink: 0 }}>→</span>{c}</div>)}
-                    </div>
-                  </div>
-                  <div style={{ background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.12)", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontSize: 9, color: PURPLE, fontFamily: "'IBM Plex Mono',monospace", marginBottom: 8 }}>📍 BEST NEIGHBORHOODS</div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{mktAnalysis.bestNeighborhoods.map((n, i) => <span key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.18)", padding: "3px 10px", borderRadius: 16 }}>{n}</span>)}</div>
-                  </div>
-                  <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'IBM Plex Mono',monospace", marginBottom: 6 }}>💡 INVESTOR TIP</div>
-                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", lineHeight: 1.6 }}>{mktAnalysis.investorTip}</div>
-                  </div>
-                </div>
-              )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+              <KpiBox label="HUD FMR 3BR" value={`$${selected.fmr3.toLocaleString()}`} color="#00E59B" />
+              <KpiBox label="Rent/Price" value={`${selected.rtp}%`} color={parseFloat(selected.rtp) >= 1 ? "#00E59B" : "#F4A636"} />
+              <KpiBox label="Med. Price" value={`$${(selected.medianPrice / 1000).toFixed(0)}K`} color="#A78BFA" />
+              <KpiBox label="Vouchers" value={selected.vouchers.toLocaleString()} color="#60A5FA" />
             </div>
+            {loading && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0" }}><Spinner /><span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontFamily: "'IBM Plex Mono',monospace" }}>Researching live market data...</span></div>}
+            {analysis && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", lineHeight: 1.65 }}>{analysis.summary}</div>
+                <div style={{ ...S.card, background: "rgba(0,229,155,0.05)", borderColor: "rgba(0,229,155,0.12)", padding: 12 }}>
+                  <span style={{ ...S.label, color: "#00E59B" }}>Est. Cash Flow (3BR)</span>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#00E59B", fontFamily: "'IBM Plex Mono',monospace" }}>${analysis.cashFlowEstimate?.low}–${analysis.cashFlowEstimate?.high}/mo</div>
+                </div>
+                {analysis.housingAuthorityNotes && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)", background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 12px" }}>🏛 {analysis.housingAuthorityNotes}</div>}
+                {analysis.bestNeighborhoods && <div><span style={{ ...S.label, color: "#A78BFA" }}>Best Neighborhoods</span><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{analysis.bestNeighborhoods.map((n, i) => <span key={i} style={{ fontSize: 11, background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.2)", color: "rgba(255,255,255,0.65)", padding: "3px 10px", borderRadius: 16 }}>{n}</span>)}</div></div>}
+                {analysis.recentNews && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px" }}>📰 {analysis.recentNews}</div>}
+                {analysis.investorTip && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 12px", lineHeight: 1.6 }}>💡 {analysis.investorTip}</div>}
+                {analysis.data_sources && <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{analysis.data_sources.map((s, i) => <SourcePill key={i} label={s} />)}</div>}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -795,113 +628,145 @@ function MarketExplorer() {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// APP SHELL — Sidebar + Navigation
-// ═══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// SETTINGS TAB
+// ══════════════════════════════════════════════════════════════════════════
+function SettingsTab() {
+  const [zillowKey, setZillowKey] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [serverOk, setServerOk] = useState(null); // null=loading, true=ok, false=error
 
-const NAV_ITEMS = [
-  { id: "analyzer", label: "Property Analyzer", icon: "🔍", desc: "Analyze any property" },
-  { id: "portfolio", label: "Portfolio Tracker", icon: "🏘", desc: "Manage your properties" },
-  { id: "markets", label: "Market Explorer", icon: "🗺", desc: "Rank US markets" },
-];
+  useEffect(() => {
+    // Load saved Zillow key from storage
+    storageGet("s8scout-zillow-key").then(k => { if (k) setZillowKey(k); });
+    // Check server health
+    fetch("/api/status").then(r => r.json()).then(d => setServerOk(d.hasAnthropicKey)).catch(() => setServerOk(false));
+  }, []);
 
-export default function Section8Scout() {
-  const [activeTool, setActiveTool] = useState("analyzer");
-  const [rapidApiKey, setRapidApiKey] = useState("");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  function saveZillowKey() {
+    storageSet("s8scout-zillow-key", zillowKey.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
 
-  const apiKeys = { rapidApi: rapidApiKey, setRapidApi: setRapidApiKey };
+  function clearZillowKey() {
+    setZillowKey("");
+    storageSet("s8scout-zillow-key", "");
+  }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "#060A10", color: "#E8EDF5", fontFamily: "'Syne', sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes spin { to{transform:rotate(360deg)} }
-        ::-webkit-scrollbar { width: 3px; }
-        ::-webkit-scrollbar-thumb { background: rgba(0,229,155,0.3); border-radius: 2px; }
-        textarea { font-family: inherit; }
-        select { appearance: none; }
-      `}</style>
+    <div style={{ maxWidth: 560 }}>
+      <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4, letterSpacing: "-0.02em" }}>Settings</div>
+      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 24 }}>Manage your optional integrations.</div>
 
-      {/* Fixed grid bg */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 0, backgroundImage: "linear-gradient(rgba(0,229,155,0.018) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,155,0.018) 1px,transparent 1px)", backgroundSize: "55px 55px", pointerEvents: "none" }} />
-
-      {/* Sidebar */}
-      <div style={{ position: "fixed", top: 0, left: 0, bottom: 0, width: sidebarCollapsed ? 64 : 220, background: "rgba(10,16,28,0.98)", borderRight: "1px solid rgba(255,255,255,0.07)", zIndex: 50, display: "flex", flexDirection: "column", transition: "width 0.2s ease", flexShrink: 0 }}>
-
-        {/* Logo */}
-        <div style={{ padding: sidebarCollapsed ? "20px 16px" : "22px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 10, overflow: "hidden" }}>
-          <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,#00E59B,#0AB87A)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>🏠</div>
-          {!sidebarCollapsed && (
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-0.02em", fontFamily: "'IBM Plex Mono',monospace", color: "#E8EDF5" }}>Section8<span style={{ color: "#00E59B" }}>Scout</span></div>
-              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", letterSpacing: "0.1em", textTransform: "uppercase" }}>BETA</div>
+      {/* Server status */}
+      <div style={{ ...S.card, marginBottom: 14, borderColor: serverOk === null ? "rgba(255,255,255,0.08)" : serverOk ? "rgba(0,229,155,0.2)" : "rgba(224,92,92,0.25)", background: serverOk ? "rgba(0,229,155,0.03)" : serverOk === false ? "rgba(224,92,92,0.04)" : "rgba(255,255,255,0.02)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: serverOk === null ? "#F4A636" : serverOk ? "#00E59B" : "#E05C5C" }} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>
+              {serverOk === null ? "Checking server..." : serverOk ? "AI Engine Online" : "AI Engine Offline"}
             </div>
-          )}
-        </div>
-
-        {/* Nav items */}
-        <div style={{ flex: 1, padding: "14px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
-          {NAV_ITEMS.map(item => {
-            const active = activeTool === item.id;
-            return (
-              <button key={item.id} onClick={() => setActiveTool(item.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: sidebarCollapsed ? "10px 0" : "10px 12px", borderRadius: 10, border: "none", cursor: "pointer", background: active ? "rgba(0,229,155,0.1)" : "transparent", borderLeft: active ? `3px solid #00E59B` : "3px solid transparent", width: "100%", textAlign: "left", transition: "all 0.15s", justifyContent: sidebarCollapsed ? "center" : "flex-start" }}
-                onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-                onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                <span style={{ fontSize: 18, flexShrink: 0 }}>{item.icon}</span>
-                {!sidebarCollapsed && (
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: active ? "#00E59B" : "#E8EDF5" }}>{item.label}</div>
-                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 1 }}>{item.desc}</div>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Collapse toggle */}
-        <div style={{ padding: "14px 10px", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-          <button onClick={() => setSidebarCollapsed(s => !s)} style={{ display: "flex", alignItems: "center", justifyContent: sidebarCollapsed ? "center" : "flex-start", gap: 10, padding: "8px 12px", borderRadius: 8, border: "none", cursor: "pointer", background: "transparent", color: "rgba(255,255,255,0.3)", width: "100%", fontSize: 12, transition: "all 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
-            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-            <span style={{ fontSize: 14 }}>{sidebarCollapsed ? "→" : "←"}</span>
-            {!sidebarCollapsed && <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, letterSpacing: "0.06em" }}>COLLAPSE</span>}
-          </button>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>
+              {serverOk === null ? "Verifying connection..." : serverOk ? "HUD FMR data, crime stats, voucher demand, and AI analysis are all active." : "ANTHROPIC_API_KEY is missing from Vercel environment variables. Add it to enable analysis."}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Main content */}
-      <div style={{ marginLeft: sidebarCollapsed ? 64 : 220, flex: 1, minHeight: "100vh", position: "relative", zIndex: 1, transition: "margin-left 0.2s ease", overflowY: "auto" }}>
+      {/* Zillow key — only user-facing key */}
+      <div style={{ ...S.card, marginBottom: 14 }}>
+        <span style={S.label}>Zillow Integration (Optional)</span>
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.65, marginBottom: 14 }}>
+          Add your free RapidAPI key to automatically pull live Zillow listing prices. Without it, just enter the price manually in the Analyzer.
+        </div>
+        <Field label="RapidAPI Key (ZLLW Working API)" value={zillowKey} onChange={setZillowKey} placeholder="Paste your X-RapidAPI-Key here" mono />
+        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+          <Btn onClick={saveZillowKey} style={{ padding: "9px 18px" }}>{saved ? "✓ Saved!" : "Save Key"}</Btn>
+          {zillowKey && <Btn onClick={clearZillowKey} variant="danger" style={{ padding: "9px 14px", fontSize: 12 }}>Clear</Btn>}
+          <a href="https://rapidapi.com/search/ZLLW" target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#00E59B", fontFamily: "'IBM Plex Mono',monospace", textDecoration: "none", marginLeft: 4 }}>Get free key →</a>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.2)", fontFamily: "'IBM Plex Mono',monospace" }}>
+          Free tier: 500 calls/month · Key stored locally in your browser
+        </div>
+      </div>
 
-        {/* Top bar */}
-        <div style={{ position: "sticky", top: 0, background: "rgba(6,10,16,0.92)", backdropFilter: "blur(16px)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "14px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", zIndex: 40 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 18 }}>{NAV_ITEMS.find(n => n.id === activeTool)?.icon}</span>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>{NAV_ITEMS.find(n => n.id === activeTool)?.label}</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{NAV_ITEMS.find(n => n.id === activeTool)?.desc}</div>
+      {/* What's included free */}
+      <div style={{ ...S.card, background: "rgba(0,229,155,0.03)", borderColor: "rgba(0,229,155,0.1)" }}>
+        <span style={{ ...S.label, color: "#00E59B" }}>What's Included — No Setup Needed</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[
+            ["🏛", "HUD Fair Market Rent", "Real FMR for any ZIP — pulled live via AI web search"],
+            ["🔫", "FBI Crime Data", "Real violent crime stats from FBI UCR database"],
+            ["🎫", "HUD Voucher Demand", "Real Housing Choice Voucher counts from HUD open data"],
+            ["🤖", "AI Property Analysis", "Full Claude AI analysis with live web research"],
+            ["💬", "AI Advisor Chat", "Ask anything about any property you analyze"],
+            ["🗺", "Market Explorer", "AI deep dives on 15+ Section 8 markets"],
+          ].map(([icon, title, desc]) => (
+            <div key={title} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{icon}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{title}</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{desc}</div>
+              </div>
+              <Badge label="FREE" color="#00E59B" />
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {NAV_ITEMS.filter(n => n.id !== activeTool).map(n => (
-              <button key={n.id} onClick={() => setActiveTool(n.id)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px 13px", color: "rgba(255,255,255,0.45)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; e.currentTarget.style.color = "#E8EDF5"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.color = "rgba(255,255,255,0.45)"; }}>
-                <span>{n.icon}</span> {n.label}
-              </button>
-            ))}
-          </div>
+          ))}
         </div>
+      </div>
+    </div>
+  );
+}
 
-        {/* Tool content */}
-        <div style={{ animation: "fadeUp 0.35s ease both" }} key={activeTool}>
-          {activeTool === "analyzer" && <PropertyAnalyzer apiKeys={apiKeys} />}
-          {activeTool === "portfolio" && <PortfolioTracker />}
-          {activeTool === "markets" && <MarketExplorer />}
+// ══════════════════════════════════════════════════════════════════════════
+// ROOT APP
+// ══════════════════════════════════════════════════════════════════════════
+export default function Section8Scout() {
+  const [activeTab, setActiveTab] = useState("Analyzer");
+  const [apiStatus, setApiStatus] = useState({ hasAnthropicKey: false, hasRapidKey: false, hasFbiKey: false });
+
+  useEffect(() => {
+    fetch("/api/status").then(r => r.json()).then(setApiStatus).catch(() => {});
+  }, []);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#060A10", color: "#E8EDF5", fontFamily: "'Syne',sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(0,229,155,0.3);border-radius:2px}
+        select,textarea{font-family:inherit}
+      `}</style>
+
+      <div style={{ position: "fixed", inset: 0, zIndex: 0, backgroundImage: "linear-gradient(rgba(0,229,155,0.018) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,155,0.018) 1px,transparent 1px)", backgroundSize: "52px 52px", pointerEvents: "none" }} />
+
+      {/* Nav */}
+      <div style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(6,10,16,0.93)", backdropFilter: "blur(20px)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 20px 13px 0", borderRight: "1px solid rgba(255,255,255,0.07)", marginRight: 8, flexShrink: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg,#00E59B,#0AB87A)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🏠</div>
+            <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 15, fontWeight: 700 }}>Section8<span style={{ color: "#00E59B" }}>Scout</span></span>
+          </div>
+          {TABS.map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)} style={{ background: "transparent", border: "none", borderBottom: `2px solid ${activeTab === tab ? "#00E59B" : "transparent"}`, color: activeTab === tab ? "#00E59B" : "rgba(255,255,255,0.4)", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, letterSpacing: "0.06em", padding: "18px 16px 16px", cursor: "pointer", transition: "color 0.15s", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+              <span>{TAB_ICONS[tab]}</span>{tab}
+            </button>
+          ))}
+          {/* Live status dot */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: apiStatus.hasAnthropicKey ? "#00E59B" : "#E05C5C" }} />
+            <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", color: "rgba(255,255,255,0.3)" }}>{apiStatus.hasAnthropicKey ? "ONLINE" : "OFFLINE"}</span>
+          </div>
         </div>
+      </div>
+
+      <div style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "28px 24px 80px", animation: "fadeUp 0.4s ease both" }}>
+        {activeTab === "Analyzer" && <AnalyzerTab />}
+        {activeTab === "Portfolio" && <PortfolioTab />}
+        {activeTab === "Markets" && <MarketsTab />}
+        {activeTab === "Settings" && <SettingsTab />}
       </div>
     </div>
   );
